@@ -23,8 +23,8 @@
  * Copyright 2018 Saso Kiselkov. All rights reserved.
  */
 
-#ifndef	_LIBRADIO_NAVAID_H_
-#define	_LIBRADIO_NAVAID_H_
+#ifndef	_LIBRADIO_NAVAIDDB_H_
+#define	_LIBRADIO_NAVAIDDB_H_
 
 #include <acfutils/avl.h>
 #include <acfutils/geom.h>
@@ -37,15 +37,15 @@ extern "C" {
 typedef struct navaiddb_s navaiddb_t;
 
 typedef enum {
-	NAVAID_NDB,
-	NAVAID_VOR,
-	NAVAID_LOC,
-	NAVAID_GS,
-	NAVAID_MRK,
-	NAVAID_DME,
-	NAVAID_FPAP,
-	NAVAID_LTP,
-	NAVAID_GLS
+	NAVAID_NDB =	1 << 0,
+	NAVAID_VOR =	1 << 1,
+	NAVAID_LOC =	1 << 2,
+	NAVAID_GS =	1 << 3,
+	NAVAID_MRK =	1 << 4,
+	NAVAID_DME =	1 << 5,
+	NAVAID_FPAP =	1 << 6,
+	NAVAID_LTP =	1 << 7,
+	NAVAID_GLS =	1 << 8
 } navaid_type_t;
 
 typedef enum {
@@ -65,7 +65,7 @@ typedef enum {
 	LTP_PROV_WAAS,
 	LTP_PROV_EGNOS,
 	LTP_PROV_MSAS,
-	LTP_PROV_GS
+	LTP_PROV_GP
 } ltp_prov_t;
 
 typedef struct {
@@ -73,7 +73,7 @@ typedef struct {
 
 	geo_pos3_t	pos;
 	vect3_t		ecef;
-	double		freq;
+	uint64_t	freq;
 	double		range;
 
 	char		id[8];
@@ -97,6 +97,7 @@ typedef struct {
 		struct {
 			double		brg;
 			mrk_type_t	type;
+			char		rwy_id[8];
 		} mrk;
 		struct {
 			double		bias;
@@ -117,7 +118,7 @@ typedef struct {
 			ltp_prov_t	prov;
 		} ltp;
 		struct {
-			double		brg;
+			double		crs;
 			double		gs;
 			char		proc_id[8];
 			char		rwy_id[8];
@@ -131,15 +132,19 @@ typedef struct {
 } navaid_t;
 
 typedef struct {
-	navaid_t	*navaids;
+	navaid_t	**navaids;
 	size_t		num_navaids;
 } navaid_list_t;
 
 navaiddb_t *navaiddb_create(const char *xpdir);
 void navaiddb_destroy(navaiddb_t *db);
 
+navaid_list_t *navaiddb_query(navaiddb_t *db, geo_pos2_t center,
+    double radius, const char *id, uint64_t *freq, navaid_type_t *type);
+void navaiddb_list_free(navaid_list_t *list);
+
 #ifdef	__cplusplus
 }
 #endif
 
-#endif	/* _LIBRADIO_NAVAID_H_ */
+#endif	/* _LIBRADIO_NAVAIDDB_H_ */
