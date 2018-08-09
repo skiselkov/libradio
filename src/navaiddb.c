@@ -151,6 +151,8 @@ parse_navaid_common(char **comps, size_t n_comps, navaid_type_t type,
 		return (NULL);
 	}
 
+	nav->ecef = geo2ecef(nav->pos, &wgs84);
+
 	return (nav);
 }
 
@@ -260,9 +262,8 @@ parse_dme(char **comps, size_t n_comps, navaid_t **nav_pp)
 		return (B_TRUE);
 	}
 
-	if (nav != NULL) {
-		nav->dme.bias = atof(comps[6]);
-	}
+	if (nav != NULL)
+		nav->dme.bias = NM2MET(atof(comps[6]));
 	if (nav == NULL ||
 	    (!is_valid_vor_freq(HZ2MHZ(nav->freq)) &&
 	    !is_valid_loc_freq(HZ2MHZ(nav->freq)))) {
@@ -338,7 +339,7 @@ parse_ltp_gls(char **comps, size_t n_comps, navaid_t **nav_pp)
 				free(nav);
 				return (B_FALSE);
 			}
-			nav->ltp.tch = atof(comps[5]);
+			nav->ltp.tch = FEET2MET(atof(comps[5]));
 			nav->ltp.crs = atof(crs_str);
 			nav->ltp.gs = atoi(tmp) / 100.0;
 		} else {
@@ -470,9 +471,6 @@ parse_earth_nav(navaiddb_t *db, const char *filename)
 
 			if (avl_find(&db->lat, nav, &where_lat) != NULL ||
 			    avl_find(&db->lon, nav, &where_lon) != NULL) {
-				logMsg("Error parsing %s:%d: duplicate navaid "
-				    "%s (%s)", filename, line_nr, nav->id,
-				    nav->name);
 				free(nav);
 				continue;
 			}
@@ -553,17 +551,21 @@ navaids_gather(navaiddb_t *db, geo_pos2_t center, const char *id,
 
 	for (navaid_t *nav = avl_nearest(&db->lat, where_lat, AVL_BEFORE);
 	    nav != NULL; nav = AVL_PREV(&db->lat, nav)) {
+		if (ABS(center.lat - nav->pos.lat) > lat_spacing)
+			break;
 		if (navaid_select(nav, id, freq, type) &&
-		    center.lat - nav->pos.lat < lat_spacing) {
+		    ABS(center.lon - nav->pos.lon) < lon_spacing) {
 			if (list != NULL)
 				list->navaids[count] = nav;
 			count++;
 		}
 	}
 	for (navaid_t *nav = avl_nearest(&db->lat, where_lat, AVL_AFTER);
-	    nav != NULL; nav = AVL_PREV(&db->lat, nav)) {
+	    nav != NULL; nav = AVL_NEXT(&db->lat, nav)) {
+		if (ABS(center.lat - nav->pos.lat) > lat_spacing)
+			break;
 		if (navaid_select(nav, id, freq, type) &&
-		    nav->pos.lat - center.lat < lat_spacing) {
+		    ABS(center.lon - nav->pos.lon) < lon_spacing) {
 			if (list != NULL)
 				list->navaids[count] = nav;
 			count++;
@@ -571,17 +573,21 @@ navaids_gather(navaiddb_t *db, geo_pos2_t center, const char *id,
 	}
 	for (navaid_t *nav = avl_nearest(&db->lon, where_lon, AVL_BEFORE);
 	    nav != NULL; nav = AVL_PREV(&db->lon, nav)) {
+		if (ABS(center.lon - nav->pos.lon) > lon_spacing)
+			break;
 		if (navaid_select(nav, id, freq, type) &&
-		    center.lon - nav->pos.lon < lon_spacing) {
+		    ABS(center.lat - nav->pos.lat) < lat_spacing) {
 			if (list != NULL)
 				list->navaids[count] = nav;
 			count++;
 		}
 	}
 	for (navaid_t *nav = avl_nearest(&db->lon, where_lon, AVL_AFTER);
-	    nav != NULL; nav = AVL_PREV(&db->lon, nav)) {
+	    nav != NULL; nav = AVL_NEXT(&db->lon, nav)) {
+		if (ABS(center.lon - nav->pos.lon) > lon_spacing)
+			break;
 		if (navaid_select(nav, id, freq, type) &&
-		    nav->pos.lon - center.lon < lon_spacing) {
+		    ABS(center.lat- nav->pos.lat) < lat_spacing) {
 			if (list != NULL)
 				list->navaids[count] = nav;
 			count++;

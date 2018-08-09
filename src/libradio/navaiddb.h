@@ -83,43 +83,43 @@ typedef struct {
 
 	union {
 		struct {
-			double		magvar;
+			double		magvar;		/* degrees */
 		} vor;
 		struct {
-			double		brg;
+			double		brg;		/* degrees */
 			char		rwy_id[8];
 		} loc;
 		struct {
-			double		brg;
-			double		gs;
+			double		brg;		/* degrees */
+			double		gs;		/* degrees */
 			char		rwy_id[8];
 		} gs;
 		struct {
-			double		brg;
+			double		brg;		/* degrees */
 			mrk_type_t	type;
 			char		rwy_id[8];
 		} mrk;
 		struct {
-			double		bias;
+			double		bias;		/* meters */
 			char		rwy_id[8];
 		} dme;
 		struct {
-			double		crs;
+			double		crs;		/* degrees */
 			char		proc_id[8];
 			char		rwy_id[8];
 			fpap_perf_t	perf;
 		} fpap;
 		struct {
-			double		tch;
-			double		crs;
-			double		gs;
+			double		tch;		/* meters */
+			double		crs;		/* degrees */
+			double		gs;		/* degrees */
 			char		proc_id[8];
 			char		rwy_id[8];
 			ltp_prov_t	prov;
 		} ltp;
 		struct {
-			double		crs;
-			double		gs;
+			double		crs;		/* degrees */
+			double		gs;		/* degrees */
 			char		proc_id[8];
 			char		rwy_id[8];
 		} gls;
