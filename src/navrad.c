@@ -831,11 +831,11 @@ navrad_get_audio_buf(unsigned nr, double volume, size_t *num_samples)
 		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
 			double level = (rnav->signal_db - NOISE_FLOOR_SIGNAL) /
 			    snr;
-			printf("noise: %f  level: %f\n", noise_level, level);
 			for (size_t i = 0; i < AUDIO_BUF_NUM_SAMPLES;
 			    i += ONE_KHZ_NUM_SAMPLES) {
 				for (size_t j = 0; j < ONE_KHZ_NUM_SAMPLES; j++)
-					buf[i + j] += one_khz_tone[j] * level;
+					buf[i + j] += one_khz_tone[j] * level *
+					    0.5;
 			}
 		}
 	}
