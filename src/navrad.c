@@ -34,20 +34,68 @@
 #include "itm_c.h"
 
 #define	WORKER_INTVAL		500000
-#define	DEF_UPD_RATE		0.5
+#define	DEF_UPD_RATE		1
 #define	MIN_DELTA_T		0.01
 #define	NAVAID_SRCH_RANGE	NM2MET(300)
 #define	ANT_BASE_GAIN		92.0	/* dB */
 #define	INTERFERENCE_LIMIT	16.0	/* dB */
-#define	NOISE_FLOOR_AUDIO	-60.0	/* dB */
+#define	NOISE_FLOOR_AUDIO	-55.0	/* dB */
 #define	NOISE_FLOOR_SIGNAL	-65.0	/* dB */
 #define	NOISE_FLOOR_TEST	-80.0	/* dB */
+#define	HDEF_MAX		2.5	/* dots */
+#define	VDEF_MAX		2.5	/* dots */
+#define	HDEF_VOR_DEG_PER_DOT	2.0	/* degrees per dot */
+#define	HDEF_LOC_DEG_PER_DOT	1.0	/* degrees per dot */
+#define	VDEF_GS_DEG_PER_DOT	3.5714	/* degrees per dot */
+#define	HSENS_VOR		12.0	/* dot deflection per deg correction */
+#define	HSENS_LOC		12.0	/* dot deflection per deg correction */
+#define	HDEF_FEEDBACK		15	/* dots per second */
+#define	MAX_INTCPT_ANGLE	30	/* degrees */
+#define	HDEF_RATE_UPD_RATE	0.2	/* FILTER_IN rate arg */
+#define	VDEF_RATE_UPD_RATE	0.2	/* FILTER_IN rate arg */
+#define	AP_STEER_UPD_RATE	0.25	/* FILTER_IN rate arg */
+#define	BRG_UPD_RATE		1.5	/* FILTER_IN rate arg */
+#define	DME_UPD_RATE		0.5	/* FILTER_IN rate arg */
+#define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
 
-#define	AUDIO_BUF_LEN		11	/* seconds */
-#define	AUDIO_BUF_NUM_SAMPLES	4800
 #define	AUDIO_BUF_NUM_CHUNKS	110
+#define	VOR_BUF_NUM_SAMPLES	4800
+#define	DME_BUF_NUM_SAMPLES	4788
+
+#define	GS_AVG_FREQ		332000000	/* Hz */
 
 static bool_t inited = B_FALSE;
+
+/*
+ * Sources for these enum values:
+ *	1) http://www.xsquawkbox.net/xpsdk/mediawiki/Sim/cockpit/autopilot/\
+ *	   autopilot_state
+ *	2) http://developer.x-plane.com/?article=\
+ *	   track-to-intercept-making-sense-of-lnav-and-locapp-modes-in-11-10
+ */
+typedef enum {
+	/* Present in XP 11.00 */
+	AP_ATHR =		0x00000,
+	AP_HDG_SEL =		0x00002,
+	AP_WING_LVL =		0x00004,
+	AP_IAS_HOLD =		0x00008,
+	AP_VS =			0x00010,
+	AP_ALT_HOLD_ARM =	0x00020,
+	AP_FLCH =		0x00040,
+	AP_HNAV_ARM =		0x00100,
+	AP_HNAV =		0x00200,
+	AP_GS_ARM =		0x00400,
+	AP_GS =			0x00800,
+	AP_FMS_ARM =		0x01000,
+	AP_FMS =		0x02000,
+	AP_ALT_HOLD =		0x04000,
+	AP_TOGA_HORIZ =		0x08000,
+	AP_TOGA_VERT =		0x10000,
+	AP_VNAV_ARM =		0x20000,
+	AP_VNAV =		0x40000,
+	/* Introduced since XP 11.10 */
+	AP_GPSS =		0x80000
+} ap_state_t;
 
 typedef struct {
 	navaid_t	*navaid;
@@ -62,6 +110,7 @@ typedef struct {
 	 * signal_db using FILTER_IN.
 	 */
 	double		signal_db;
+	double		signal_db_omni;
 	double		signal_db_tgt;
 	bool_t		outdated;
 
@@ -81,27 +130,39 @@ typedef struct {
 
 	mutex_t		lock;
 	uint64_t	freq;
-	double		hdef;
-	double		hdef_tgt;
-	double		vdef;
-	double		vdef_tgt;
-	distort_t	*distort;
+	double		hdef_pilot;
+	bool_t		tofrom_pilot;
+	double		hdef_copilot;
+	bool_t		tofrom_copilot;
+	double		gs;
+	distort_t	*distort_vloc;
+	distort_t	*distort_dme;
+	double		brg;
+	double		dme;
 
-	avl_tree_t	vors;
+	double		vdef;
+	double		vdef_prev;
+	double		vdef_rate;
+
+	avl_tree_t	vlocs;
+	avl_tree_t	gses;
 	avl_tree_t	dmes;
 
 	struct {
-		dr_t	ovrd;
+		dr_t	ovrd_nav_needles;
 		dr_t	freq;
 		dr_t	dir_degt;
+		dr_t	slope_degt;
 
+		dr_t	crs_degm_pilot;
+		dr_t	fromto_pilot;
 		dr_t	hdef_pilot;
 		dr_t	vdef_pilot;
-		dr_t	fromto_pilot;
 
+		dr_t	crs_degm_copilot;
+		dr_t	fromto_copilot;
 		dr_t	hdef_copilot;
 		dr_t	vdef_copilot;
-		dr_t	fromto_copilot;
 
 		dr_t	dme_nm;
 	} drs;
@@ -115,6 +176,13 @@ static struct {
 	double			magvar;
 	double			last_t;
 
+	struct {
+		double		hdef_prev;
+		double		hdef_rate;
+		double		steer_tgt;
+		bool_t		ovrd_act;
+	} ap;
+
 	radio_t			radios[NUM_NAV_RADIOS];
 	worker_t		worker;
 
@@ -127,6 +195,17 @@ static struct {
 	dr_t		elev;
 	dr_t		sim_time;
 	dr_t		magvar;
+
+	dr_t		ap_steer_deg_mag;
+	dr_t		ovrd_nav_heading;
+	dr_t		ovrd_dme;
+	dr_t		ovrd_ap;
+	dr_t		dme_nm;
+	dr_t		hsi_sel;
+	dr_t		ap_state;
+	dr_t		hdg;
+	dr_t		hpath;
+	dr_t		alpha;
 } drs;
 
 static const char *morse_table[] = {
@@ -168,8 +247,8 @@ static const char *morse_table[] = {
     "0011"	/* Z */
 };
 
-#define	ONE_KHZ_NUM_SAMPLES	(NAVRAD_AUDIO_SRATE / 1000)
-static const int16_t one_khz_tone[ONE_KHZ_NUM_SAMPLES] = {
+#define	VOR_TONE_NUM_SAMPLES	(NAVRAD_AUDIO_SRATE / 1000)
+static const int16_t vor_tone[VOR_TONE_NUM_SAMPLES] = {
     0,
     4276,
     8480,
@@ -220,6 +299,133 @@ static const int16_t one_khz_tone[ONE_KHZ_NUM_SAMPLES] = {
     -4276
 };
 
+#define	DME_TONE_NUM_SAMPLES	36
+static const int16_t dme_tone[DME_TONE_NUM_SAMPLES] = {
+    0,
+    5689,
+    11206,
+    16383,
+    21062,
+    25100,
+    28377,
+    30790,
+    32269,
+    32766,
+    32269,
+    30790,
+    28377,
+    25100,
+    21062,
+    16383,
+    11206,
+    5689,
+    0,
+    -5689,
+    -11206,
+    -16383,
+    -21062,
+    -25100,
+    -28377,
+    -30790,
+    -32269,
+    -32766,
+    -32269,
+    -30790,
+    -28377,
+    -25101,
+    -21062,
+    -16383,
+    -11207,
+    -5689
+};
+
+static double brg2navaid(navaid_t *nav, double *dist);
+static double radio_get_hdef(radio_t *radio, bool_t pilot, bool_t *tofrom);
+static void radio_hdef_update(radio_t *radio, bool_t pilot, double d_t);
+static void radio_vdef_update(radio_t *radio, double d_t);
+static double radio_get_bearing(radio_t *radio);
+static double radio_get_dme(radio_t *radio);
+static void radio_brg_update(radio_t *radio, double d_t);
+static void radio_dme_update(radio_t *radio, double d_t);
+
+static void
+comp_signal_db(radio_navaid_t *rnav)
+{
+	const vect2_t vordme_dist_curve[] = {
+	    VECT2(NM2MET(0), -20),
+	    VECT2(NM2MET(20), -20),
+	    VECT2(NM2MET(100), 0),
+	    VECT2(NM2MET(120), 0),
+	    NULL_VECT2
+	};
+	const vect2_t loc_dist_curve[] = {
+	    VECT2(NM2MET(0), -27),
+	    VECT2(NM2MET(10), -27),
+	    VECT2(NM2MET(40), -17),
+	    VECT2(NM2MET(50), -17),
+	    NULL_VECT2
+	};
+	const vect2_t gs_dist_curve[] = {
+	    VECT2(NM2MET(0), -25),
+	    VECT2(NM2MET(10), -25),
+	    VECT2(NM2MET(40), -15),
+	    VECT2(NM2MET(50), -15),
+	    NULL_VECT2
+	};
+	const vect2_t loc_rbrg_curve[] = {
+	    VECT2(0, 0),
+	    VECT2(30, -5),
+	    VECT2(60, -10),
+	    VECT2(90, -20),
+	    VECT2(120, -20),
+	    VECT2(160, -10),
+	    VECT2(180, -3),
+	    NULL_VECT2
+	};
+	const vect2_t gs_rbrg_curve[] = {
+	    VECT2(0, 0),
+	    VECT2(20, -5),
+	    VECT2(60, -10),
+	    VECT2(90, -40),
+	    NULL_VECT2
+	};
+	navaid_t *nav = rnav->navaid;
+
+	ASSERT(nav != NULL);
+
+	switch (nav->type) {
+	case NAVAID_VOR:
+	case NAVAID_DME:
+		rnav->signal_db = rnav->signal_db_omni -
+		    fx_lin_multi(nav->range, vordme_dist_curve, B_TRUE);
+		break;
+	case NAVAID_LOC:
+	case NAVAID_GS: {
+		double crs = (nav->type == NAVAID_LOC ? nav->loc.brg :
+		    nav->gs.brg);
+		double brg_fm_nav = brg2navaid(nav, NULL);
+		double rbrg = fabs(rel_hdg(crs, brg_fm_nav));
+		double signal_db = rnav->signal_db_omni;
+
+		if (nav->type == NAVAID_LOC) {
+			signal_db += fx_lin_multi(rbrg, loc_rbrg_curve, B_TRUE);
+			signal_db += fx_lin_multi(nav->range, loc_dist_curve,
+			    B_TRUE);
+		} else {
+			signal_db += fx_lin_multi(rbrg, gs_rbrg_curve, B_TRUE);
+			signal_db += fx_lin_multi(nav->range, gs_dist_curve,
+			    B_TRUE);
+		}
+
+		rnav->signal_db = signal_db;
+		break;
+	}
+	default:
+		rnav->signal_db = rnav->signal_db_omni;
+		break;
+	}
+}
+
 static void
 audio_buf_chunks_encode(radio_navaid_t *rnav)
 {
@@ -261,21 +467,143 @@ signal_levels_update(avl_tree_t *tree, double d_t)
 {
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		FILTER_IN(rnav->signal_db, rnav->signal_db_tgt, d_t,
+		FILTER_IN(rnav->signal_db_omni, rnav->signal_db_tgt, d_t,
 		    USEC2SEC(WORKER_INTVAL));
+		comp_signal_db(rnav);
 	}
+}
+
+static void
+ap_drs_config(double d_t)
+{
+	int ap_state = dr_geti(&drs.ap_state);
+	int hsi_sel = dr_geti(&drs.hsi_sel);
+	radio_t *radio;
+	double beta, hdef, hsens, intcpt, corr;
+
+	switch (hsi_sel) {
+	case 0:
+		radio = &navrad.radios[0];
+		break;
+	case 1:
+		radio = &navrad.radios[1];
+		break;
+	default:
+		dr_seti(&drs.ovrd_nav_heading, 0);
+		return;
+	}
+
+	if ((ap_state & AP_HNAV_ARM) && !(ap_state & AP_HNAV))
+		dr_seti(&drs.ap_state, AP_HNAV_ARM | AP_HNAV);
+	dr_seti(&drs.ovrd_nav_heading, 1);
+
+	hdef = dr_getf(&radio->drs.hdef_pilot);
+	FILTER_IN(navrad.ap.hdef_rate, (hdef - navrad.ap.hdef_prev) / d_t, d_t,
+	    HDEF_RATE_UPD_RATE);
+	beta = rel_hdg(normalize_hdg(dr_getf(&drs.hpath)),
+	    normalize_hdg(dr_getf(&drs.hdg)));
+	if (is_valid_loc_freq(radio->freq / 1000000.0))
+		hsens = HSENS_LOC;
+	else
+		hsens = HSENS_VOR;
+
+	corr = clamp(hdef * hsens + navrad.ap.hdef_rate * HDEF_FEEDBACK,
+	    -MAX_INTCPT_ANGLE, MAX_INTCPT_ANGLE);
+	intcpt = normalize_hdg(dr_getf(&radio->drs.crs_degm_pilot) + corr +
+	    beta);
+	FILTER_IN(navrad.ap.steer_tgt, intcpt, d_t, AP_STEER_UPD_RATE);
+	dr_setf(&drs.ap_steer_deg_mag, navrad.ap.steer_tgt);
+
+	navrad.ap.hdef_prev = hdef;
+
+	if ((ap_state & AP_GS_ARM) && ABS(radio->vdef) < AP_GS_CAPTURE_VDEF) {
+		dr_seti(&drs.ovrd_ap, 1);
+		dr_seti(&drs.ap_state, AP_GS_ARM | AP_GS);
+		navrad.ap.ovrd_act = B_TRUE;
+	} else if (!(ap_state & AP_GS) && navrad.ap.ovrd_act) {
+		dr_seti(&drs.ovrd_ap, 0);
+		navrad.ap.ovrd_act = B_FALSE;
+	}
+	if ((isnan(radio->vdef) || isnan(radio->gs)) && (ap_state & AP_GS)) {
+		dr_seti(&drs.ap_state, AP_GS);
+		dr_seti(&drs.ovrd_ap, 0);
+		navrad.ap.ovrd_act = B_FALSE;
+	}
+}
+
+static void
+ap_radio_drs_config(radio_t *radio)
+{
+	double hdef;
+	bool_t tofrom;
+
+	dr_seti(&radio->drs.ovrd_nav_needles, 1);
+	hdef = radio_get_hdef(radio, B_TRUE, &tofrom);
+	if (!isnan(radio->hdef_pilot)) {
+		dr_setf(&radio->drs.hdef_pilot, hdef);
+		dr_seti(&radio->drs.fromto_pilot, 1 + tofrom);
+	} else {
+		dr_seti(&radio->drs.fromto_pilot, 0);
+	}
+
+	hdef = radio_get_hdef(radio, B_FALSE, &tofrom);
+	if (!isnan(hdef)) {
+		dr_setf(&radio->drs.hdef_copilot, hdef);
+		dr_seti(&radio->drs.fromto_copilot, 1 + tofrom);
+	} else {
+		dr_seti(&radio->drs.fromto_copilot, 0);
+	}
+
+	if (!isnan(radio->brg))
+		dr_setf(&radio->drs.dir_degt, normalize_hdg(radio->brg));
+	else
+		dr_setf(&radio->drs.dir_degt, 0);
+
+	if (!isnan(radio->dme))
+		dr_setf(&radio->drs.dme_nm, MET2NM(radio->dme));
+	else
+		dr_setf(&radio->drs.dme_nm, 0);
+
+	if (!isnan(radio->gs) && !isnan(radio->vdef)) {
+		enum { MAX_CORR = 4 };
+		double tgt = radio->gs + 5 * radio->vdef +
+		    10 * radio->vdef_rate;
+		tgt = clamp(tgt, radio->gs - MAX_CORR, radio->gs + MAX_CORR);
+		dr_setf(&radio->drs.slope_degt, tgt);
+	} else {
+		dr_setf(&radio->drs.slope_degt, 0);
+	}
+	
+	dr_setf(&radio->drs.vdef_pilot, 0);
+	dr_setf(&radio->drs.vdef_copilot, 0);
 }
 
 static void
 radio_floop_cb(radio_t *radio, double d_t)
 {
 	mutex_enter(&radio->lock);
-	radio->freq = dr_getf(&radio->drs.freq) * 10000;
-	FILTER_IN(radio->hdef, radio->hdef_tgt, d_t, DEF_UPD_RATE);
-	FILTER_IN(radio->vdef, radio->vdef_tgt, d_t, DEF_UPD_RATE);
 
-	signal_levels_update(&radio->vors, d_t);
+	radio->freq = dr_getf(&radio->drs.freq) * 10000;
+
+	signal_levels_update(&radio->vlocs, d_t);
+	signal_levels_update(&radio->gses, d_t);
 	signal_levels_update(&radio->dmes, d_t);
+
+	ap_drs_config(d_t);
+	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
+		radio_hdef_update(&navrad.radios[i], B_TRUE, d_t);
+		radio_hdef_update(&navrad.radios[i], B_FALSE, d_t);
+		radio_vdef_update(&navrad.radios[i], d_t);
+		radio_brg_update(&navrad.radios[i], d_t);
+		radio_dme_update(&navrad.radios[i], d_t);
+		ap_radio_drs_config(&navrad.radios[i]);
+	}
+
+	dr_seti(&drs.ovrd_dme, 1);
+	if (!isnan(navrad.radios[0].dme))
+		dr_setf(&drs.dme_nm, MET2NM(navrad.radios[0].dme));
+	else
+		dr_setf(&drs.dme_nm, 0);
 
 	mutex_exit(&radio->lock);
 }
@@ -343,13 +671,22 @@ static void
 radio_refresh_navaid_list(radio_t *radio, geo_pos2_t pos, uint64_t freq)
 {
 	if (is_valid_vor_freq(freq / 1000000.0)) {
-		radio_refresh_navaid_list_type(radio, &radio->vors, pos, freq,
-		    NAVAID_VOR);
-		radio_refresh_navaid_list_type(radio, &radio->dmes, pos, freq,
-		    NAVAID_DME);
+		radio_refresh_navaid_list_type(radio, &radio->vlocs,
+		    pos, freq, NAVAID_VOR);
+		flush_navaid_tree(&radio->gses);
+		radio_refresh_navaid_list_type(radio, &radio->dmes,
+		    pos, freq, NAVAID_DME);
+	} else if (is_valid_loc_freq(freq / 1000000.0)) {
+		radio_refresh_navaid_list_type(radio, &radio->vlocs,
+		    pos, freq, NAVAID_LOC);
+		radio_refresh_navaid_list_type(radio, &radio->gses,
+		    pos, freq, NAVAID_GS);
+		radio_refresh_navaid_list_type(radio, &radio->dmes,
+		    pos, freq, NAVAID_DME);
 	} else {
 		mutex_enter(&radio->lock);
-		flush_navaid_tree(&radio->vors);
+		flush_navaid_tree(&radio->vlocs);
+		flush_navaid_tree(&radio->gses);
 		flush_navaid_tree(&radio->dmes);
 		mutex_exit(&radio->lock);
 	}
@@ -454,9 +791,13 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 	 * Don't have to grab the lock here, since we're the only ones that
 	 * can modify the trees and we're not going to be doing so here.
 	 */
-	for (radio_navaid_t *rnav = avl_first(&radio->vors); rnav != NULL;
-	    rnav = AVL_NEXT(&radio->vors, rnav)) {
+	for (radio_navaid_t *rnav = avl_first(&radio->vlocs); rnav != NULL;
+	    rnav = AVL_NEXT(&radio->vlocs, rnav)) {
 		radio_navaid_recompute_signal(rnav, freq, pos, fpp);
+	}
+	for (radio_navaid_t *rnav = avl_first(&radio->gses); rnav != NULL;
+	    rnav = AVL_NEXT(&radio->gses, rnav)) {
+		radio_navaid_recompute_signal(rnav, GS_AVG_FREQ, pos, fpp);
 	}
 	for (radio_navaid_t *rnav = avl_first(&radio->dmes); rnav != NULL;
 	    rnav = AVL_NEXT(&radio->dmes, rnav)) {
@@ -533,31 +874,42 @@ radio_init(radio_t *radio, int nr)
 {
 	radio->nr = nr;
 	mutex_init(&radio->lock);
-	avl_create(&radio->vors, navrad_navaid_compar,
+	avl_create(&radio->vlocs, navrad_navaid_compar,
+	    sizeof (radio_navaid_t), offsetof(radio_navaid_t, node));
+	avl_create(&radio->gses, navrad_navaid_compar,
 	    sizeof (radio_navaid_t), offsetof(radio_navaid_t, node));
 	avl_create(&radio->dmes, navrad_navaid_compar,
 	    sizeof (radio_navaid_t), offsetof(radio_navaid_t, node));
-	radio->distort = distort_init(NAVRAD_AUDIO_SRATE);
+	radio->distort_vloc = distort_init(NAVRAD_AUDIO_SRATE);
+	radio->distort_dme = distort_init(NAVRAD_AUDIO_SRATE);
 
-	fdr_find(&radio->drs.ovrd,
+	fdr_find(&radio->drs.ovrd_nav_needles,
 	    "sim/operation/override/override_nav%d_needles", nr);
 	fdr_find(&radio->drs.freq,
 	    "sim/cockpit2/radios/actuators/nav%d_frequency_hz", nr);
 	fdr_find(&radio->drs.dir_degt, "sim/cockpit/radios/nav%d_dir_degt", nr);
+	fdr_find(&radio->drs.slope_degt,
+	    "sim/cockpit/radios/nav%d_slope_degt", nr);
+
+	fdr_find(&radio->drs.crs_degm_pilot,
+	    "sim/cockpit2/radios/actuators/nav%d_obs_deg_mag_pilot", nr);
+	fdr_find(&radio->drs.fromto_pilot,
+	    "sim/cockpit/radios/nav%d_fromto", nr);
 	fdr_find(&radio->drs.hdef_pilot,
 	    "sim/cockpit/radios/nav%d_hdef_dot", nr);
 	fdr_find(&radio->drs.vdef_pilot,
 	    "sim/cockpit/radios/nav%d_vdef_dot", nr);
+
+	fdr_find(&radio->drs.crs_degm_copilot,
+	    "sim/cockpit2/radios/actuators/nav%d_obs_deg_mag_copilot", nr);
+	fdr_find(&radio->drs.fromto_copilot,
+	    "sim/cockpit/radios/nav%d_fromto2", nr);
 	fdr_find(&radio->drs.hdef_copilot,
 	    "sim/cockpit/radios/nav%d_hdef_dot2", nr);
 	fdr_find(&radio->drs.vdef_copilot,
 	    "sim/cockpit/radios/nav%d_vdef_dot2", nr);
 	fdr_find(&radio->drs.dme_nm,
 	    "sim/cockpit/radios/nav%d_dme_dist_m", nr);
-	fdr_find(&radio->drs.fromto_pilot,
-	    "sim/cockpit/radios/nav%d_fromto", nr);
-	fdr_find(&radio->drs.fromto_copilot,
-	    "sim/cockpit/radios/nav%d_fromto2", nr);
 }
 
 static void
@@ -567,23 +919,32 @@ radio_fini(radio_t *radio)
 	radio_navaid_t *nav;
 
 	cookie = NULL;
-	while ((nav = avl_destroy_nodes(&radio->vors, &cookie)) != NULL)
+	while ((nav = avl_destroy_nodes(&radio->vlocs, &cookie)) != NULL)
 		free(nav);
-	avl_destroy(&radio->vors);
+	avl_destroy(&radio->vlocs);
+
+	cookie = NULL;
+	while ((nav = avl_destroy_nodes(&radio->gses, &cookie)) != NULL)
+		free(nav);
+	avl_destroy(&radio->gses);
 
 	cookie = NULL;
 	while ((nav = avl_destroy_nodes(&radio->dmes, &cookie)) != NULL)
 		free(nav);
 	avl_destroy(&radio->dmes);
 
-	if (radio->distort != NULL)
-		distort_fini(radio->distort);
+	if (radio->distort_vloc != NULL)
+		distort_fini(radio->distort_vloc);
+	if (radio->distort_dme != NULL)
+		distort_fini(radio->distort_dme);
+
+	dr_seti(&radio->drs.ovrd_nav_needles, 0);
 
 	mutex_destroy(&radio->lock);
 }
 
 static navaid_t *
-radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree, double *signal_db)
+radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree, double *signal_p)
 {
 	radio_navaid_t *strongest = NULL, *second = NULL;
 	navaid_t *winner = NULL;
@@ -592,11 +953,13 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree, double *signal_db)
 
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		if (rnav->signal_db < NOISE_FLOOR_SIGNAL)
+		double signal_db = rnav->signal_db;
+
+		if (signal_db < NOISE_FLOOR_SIGNAL)
 			continue;
 		if (strongest == NULL)
 			strongest = rnav;
-		if (rnav->signal_db > strongest->signal_db) {
+		if (signal_db > strongest->signal_db) {
 			second = strongest;
 			strongest = rnav;
 		} else if (second != NULL &&
@@ -608,13 +971,14 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree, double *signal_db)
 		ASSERT3P(strongest, !=, second);
 
 	if (second != NULL &&
-	    strongest->signal_db - second->signal_db < INTERFERENCE_LIMIT)
+	    strongest->signal_db - second->signal_db < INTERFERENCE_LIMIT) {
 		strongest = NULL;
-
-	if (strongest != NULL) {
+		if (signal_p != NULL)
+			*signal_p = NAN;
+	} else if (strongest != NULL) {
 		winner = strongest->navaid;
-		if (signal_db != NULL)
-			*signal_db = strongest->signal_db;
+		if (signal_p != NULL)
+			*signal_p = strongest->signal_db;
 	}
 
 	mutex_exit(&radio->lock);
@@ -657,39 +1021,37 @@ brg2navaid(navaid_t *nav, double *dist)
 }
 
 static double
-radio_get_bearing(radio_t *radio, bool_t magnetic)
+radio_get_bearing(radio_t *radio)
 {
 	double brg, error, signal_db, rng;
-	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vors,
+	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    &signal_db);
 	enum { MAX_ERROR = 10 };
 
-	if (nav == NULL)
+	if (nav == NULL || nav->type == NAVAID_LOC)
 		return (NAN);
 
 	brg = brg2navaid(nav, &rng);
 	error = MAX_ERROR * signal_error(nav, brg, signal_db, rng);
-	printf("brg error: %.2f\n", error);
 
-	return (brg + error + (magnetic ? navrad.magvar : 0));
+	return (brg + error);
 }
 
 static double
 radio_get_radial(radio_t *radio)
 {
 	double radial, error, signal_db, rng;
-	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vors,
+	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    &signal_db);
 	enum { MAX_ERROR = 10 };
 
-	if (nav == NULL)
+	if (nav == NULL || nav->type == NAVAID_LOC)
 		return (NAN);
 
 	radial = normalize_hdg(brg2navaid(nav, &rng) + 180);
 	error = MAX_ERROR * signal_error(nav, radial, signal_db, rng);
-	printf("brg error: %.2f\n", error);
 
-	return (radial + error - nav->vor.magvar);
+	return (normalize_hdg(radial + error - nav->vor.magvar));
 }
 
 static double
@@ -714,9 +1076,176 @@ radio_get_dme(radio_t *radio)
 
 	brg = brg2navaid(nav, &rng);
 	error = MAX_ERROR * signal_error(nav, brg, signal_db, rng);
-	printf("dme error: %.2f\n", error);
 
 	return (dist + error + nav->dme.bias);
+}
+
+static double
+radio_comp_hdef_loc(radio_t *radio)
+{
+	double signal_db;
+	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
+	    &signal_db);
+	const double MAX_ERROR = 1.5;
+	double brg, dist, error, hdef;
+
+	if (nav == NULL)
+		return (NAN);
+	brg = brg2navaid(nav, &dist);
+	error = MAX_ERROR * signal_error(nav, brg, signal_db, dist);
+	brg = normalize_hdg(brg + error);
+
+	hdef = rel_hdg(nav->loc.brg, brg) / HDEF_LOC_DEG_PER_DOT;
+
+	return (hdef);
+}
+
+static double
+radio_comp_hdef_vor(radio_t *radio, bool_t pilot, bool_t *tofrom_p)
+{
+	double radial = radio_get_radial(radio);
+	double crs, hdef;
+
+	if (pilot)
+		crs = dr_getf(&radio->drs.crs_degm_pilot);
+	else
+		crs = dr_getf(&radio->drs.crs_degm_copilot);
+
+	if (isnan(radial) || isnan(crs))
+		return (NAN);
+	radial = normalize_hdg(radial);
+	crs = normalize_hdg(crs);
+
+	if (ABS(rel_hdg(crs, radial)) < 90) {
+		hdef = rel_hdg(radial, crs);
+		*tofrom_p = B_TRUE;
+	} else {
+		hdef = rel_hdg(normalize_hdg(crs + 180), radial);
+		*tofrom_p = B_FALSE;
+	}
+	hdef /= HDEF_VOR_DEG_PER_DOT;
+
+	return (hdef);
+}
+
+static void
+radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
+{
+	double hdef;
+	bool_t tofrom;
+
+	if (is_valid_loc_freq(radio->freq / 1000000.0)) {
+		hdef = radio_comp_hdef_loc(radio);
+		tofrom = B_FALSE;
+	} else {
+		hdef = radio_comp_hdef_vor(radio, pilot, &tofrom);
+	}
+
+	if (!isnan(hdef)) {
+		if (pilot) {
+			FILTER_IN(radio->hdef_pilot, hdef, d_t, DEF_UPD_RATE);
+			radio->tofrom_pilot = tofrom;
+		} else {
+			FILTER_IN(radio->hdef_copilot, hdef, d_t, DEF_UPD_RATE);
+			radio->tofrom_copilot = tofrom;
+		}
+	}
+}
+
+static void
+radio_vdef_update(radio_t *radio, double d_t)
+{
+	double signal_db;
+	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->gses,
+	    &signal_db);
+	double brg, dist, long_dist, d_elev, angle, vdef, error, angle_eff;
+	const double MAX_ERROR = 0.5, OFFPATH_MAX_ERROR = 4.0;
+	const double rand_coeffs[] = { M_PI, 2.12, 12.28, 35.12, 75.21 };
+	double offpath;
+	const vect2_t signal_angle_curve[] = {
+	    VECT2(0, 0),
+	    VECT2(5, -2),
+	    VECT2(20, -5),
+	    VECT2(90, -20),
+	    NULL_VECT2
+	};
+
+	if (nav == NULL) {
+		radio->vdef = NAN;
+		radio->gs = NAN;
+		return;
+	}
+
+	brg = brg2navaid(nav, &dist);
+	offpath = fabs(rel_hdg(brg, nav->gs.brg));
+	long_dist = dist * cos(DEG2RAD(offpath));
+	d_elev = navrad.pos.elev - nav->pos.elev;
+	if (ABS(long_dist) > 0.1)
+		angle = RAD2DEG(atan(d_elev / long_dist));
+	else
+		angle = 90;
+
+	signal_db += fx_lin_multi(ABS(angle), signal_angle_curve, B_TRUE);
+	error = MAX_ERROR * signal_error(nav, brg, signal_db + 5, dist);
+	error += OFFPATH_MAX_ERROR *
+	    sin(nav->gs.brg + offpath / rand_coeffs[0]) *
+	    sin(nav->gs.brg + offpath / rand_coeffs[1]) *
+	    sin(nav->gs.brg + offpath / rand_coeffs[2]) *
+	    sin(offpath / rand_coeffs[3]) * sin(offpath / rand_coeffs[4]);
+
+	angle_eff = (((int)(angle * 1000)) % ((int)(nav->gs.gs * 2 * 1000))) /
+	    1000.0;
+	vdef = ((angle_eff + error) - nav->gs.gs) * VDEF_GS_DEG_PER_DOT;
+
+	FILTER_IN_NAN(radio->vdef, vdef, d_t, DEF_UPD_RATE);
+	radio->vdef = clamp(radio->vdef, -VDEF_MAX, VDEF_MAX);
+	radio->gs = nav->gs.gs;
+
+	FILTER_IN(radio->vdef_rate, (radio->vdef - radio->vdef_prev) / d_t,
+	    d_t, VDEF_RATE_UPD_RATE);
+	radio->vdef_prev = radio->vdef;
+
+	printf("angle:%.3f  eff:%.3f  error:%.3f  vdef:%.2f  rate:%.2f  "
+	    "signal:%.1f\n", angle, angle_eff, error, vdef,
+	    radio->vdef_rate, signal_db);
+}
+
+static void
+radio_brg_update(radio_t *radio, double d_t)
+{
+	double brg = radio_get_bearing(radio);
+
+	if (!isnan(brg)) {
+		if (isnan(radio->brg))
+			radio->brg = 0;
+		brg = normalize_hdg(brg - dr_getf(&drs.hdg));
+		if (brg > 180)
+			brg -= 360;
+		FILTER_IN(radio->brg, brg, d_t, BRG_UPD_RATE);
+	} else {
+		radio->brg = NAN;
+	}
+}
+
+static void
+radio_dme_update(radio_t *radio, double d_t)
+{
+	FILTER_IN_NAN(radio->dme, radio_get_dme(radio), d_t, DME_UPD_RATE);
+}
+
+static double
+radio_get_hdef(radio_t *radio, bool_t pilot, bool_t *tofrom)
+{
+	ASSERT(tofrom != NULL);
+	if (pilot && !isnan(radio->hdef_pilot)) {
+		*tofrom = radio->tofrom_pilot;
+		return (clamp(radio->hdef_pilot, -HDEF_MAX, HDEF_MAX));
+	}
+	if (!pilot && !isnan(radio->hdef_copilot)) {
+		*tofrom = radio->tofrom_copilot;
+		return (clamp(radio->hdef_copilot, -HDEF_MAX, HDEF_MAX));
+	}
+	return (NAN);
 }
 
 bool_t
@@ -736,6 +1265,21 @@ navrad_init(navaiddb_t *db)
 	fdr_find(&drs.elev, "sim/flightmodel/position/elevation");
 	fdr_find(&drs.sim_time, "sim/time/total_running_time_sec");
 	fdr_find(&drs.magvar, "sim/flightmodel/position/magnetic_variation");
+
+	fdr_find(&drs.ap_steer_deg_mag,
+	    "sim/cockpit/autopilot/nav_steer_deg_mag");
+	fdr_find(&drs.ovrd_nav_heading,
+	    "sim/operation/override/override_nav_heading");
+	fdr_find(&drs.ovrd_dme, "sim/operation/override/override_dme");
+	fdr_find(&drs.dme_nm, "sim/cockpit/radios/standalone_dme_dist_m");
+	fdr_find(&drs.hsi_sel,
+	    "sim/cockpit2/radios/actuators/HSI_source_select_pilot");
+	fdr_find(&drs.ap_state, "sim/cockpit/autopilot/autopilot_state");
+	fdr_find(&drs.hdg, "sim/flightmodel/position/psi");
+	fdr_find(&drs.hpath, "sim/flightmodel/position/hpath");
+
+	fdr_find(&drs.ovrd_ap, "sim/operation/override/override_autopilot");
+	fdr_find(&drs.alpha, "sim/flightmodel/position/alpha");
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++)
 		radio_init(&navrad.radios[i], i + 1);
@@ -772,15 +1316,19 @@ navrad_fini(void)
 	for (int i = 0; i < NUM_NAV_RADIOS; i++)
 		radio_fini(&navrad.radios[i]);
 
+	dr_seti(&drs.ovrd_nav_heading, 0);
+	dr_seti(&drs.ovrd_dme, 0);
+	dr_seti(&drs.ovrd_ap, 0);
+
 	mutex_destroy(&navrad.lock);
 	XPLMUnregisterFlightLoopCallback(floop_cb, NULL);
 }
 
 double
-navrad_get_bearing(unsigned nr, bool_t magnetic)
+navrad_get_bearing(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
-	return (radio_get_bearing(&navrad.radios[nr], magnetic));
+	return (normalize_hdg(navrad.radios[nr].brg));
 }
 
 double
@@ -794,33 +1342,50 @@ double
 navrad_get_dme(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
-	return (radio_get_dme(&navrad.radios[nr]));
+	return (navrad.radios[nr].dme);
 }
 
-int16_t *
-navrad_get_audio_buf(unsigned nr, double volume, size_t *num_samples)
+double
+navrad_get_hdef(unsigned nr, bool_t pilot, bool_t *tofrom)
 {
-	int16_t *buf = calloc(AUDIO_BUF_NUM_SAMPLES, sizeof (*buf));
-	double max_db = NOISE_FLOOR_AUDIO;
-	double snr;
-	radio_t *radio;
-	double noise_level;
-
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
-	radio = &navrad.radios[nr];
+	return (radio_get_hdef(&navrad.radios[nr], pilot, tofrom));
+}
+
+double
+navrad_get_vdef(unsigned nr)
+{
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	return (navrad.radios[nr].vdef);
+}
+
+bool_t 
+navrad_is_loc(unsigned nr)
+{
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	return (is_valid_loc_freq(navrad.radios[nr].freq / 1000000.0));
+}
+
+static int16_t *
+get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
+    const int16_t *tone, size_t step, size_t num_samples,
+    distort_t *distort_ctx)
+{
+	int16_t *buf = calloc(num_samples, sizeof (*buf));
+	double max_db = NOISE_FLOOR_AUDIO;
+	double span, noise_level;
 
 	mutex_enter(&radio->lock);
 
-	for (radio_navaid_t *rnav = avl_first(&radio->vors); rnav != NULL;
-	    rnav = AVL_NEXT(&radio->vors, rnav)) {
+	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
+	    rnav = AVL_NEXT(tree, rnav)) {
 		max_db = MAX(max_db, rnav->signal_db);
 	}
-	snr = max_db - NOISE_FLOOR_SIGNAL;
-	noise_level = 1 / MAX(max_db - NOISE_FLOOR_AUDIO, 1);
+	span = max_db - NOISE_FLOOR_SIGNAL;
+	noise_level = (NOISE_FLOOR_AUDIO - NOISE_FLOOR_SIGNAL) / span;
 
-	for (radio_navaid_t *rnav = avl_first(&radio->vors); rnav != NULL;
-	    rnav = AVL_NEXT(&radio->vors, rnav)) {
-
+	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
+	    rnav = AVL_NEXT(tree, rnav)) {
 		rnav->cur_audio_chunk++;
 		if (rnav->cur_audio_chunk >= AUDIO_BUF_NUM_CHUNKS)
 			rnav->cur_audio_chunk = 0;
@@ -829,23 +1394,43 @@ navrad_get_audio_buf(unsigned nr, double volume, size_t *num_samples)
 			continue;
 
 		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
-			double level = (rnav->signal_db - NOISE_FLOOR_SIGNAL) /
-			    snr;
-			for (size_t i = 0; i < AUDIO_BUF_NUM_SAMPLES;
-			    i += ONE_KHZ_NUM_SAMPLES) {
-				for (size_t j = 0; j < ONE_KHZ_NUM_SAMPLES; j++)
-					buf[i + j] += one_khz_tone[j] * level *
-					    0.5;
+			double level =
+			    (rnav->signal_db - NOISE_FLOOR_SIGNAL) / span;
+			for (size_t i = 0; i < num_samples; i += step) {
+				for (size_t j = 0; j < step; j++)
+					buf[i + j] += tone[j] * level * 0.4;
 			}
 		}
 	}
 
-	distort(radio->distort, buf, AUDIO_BUF_NUM_SAMPLES, volume,
-	    noise_level);
+	distort(distort_ctx, buf, num_samples, volume, noise_level * volume);
 
 	mutex_exit(&radio->lock);
 
-	*num_samples = AUDIO_BUF_NUM_SAMPLES;
+	return (buf);
+}
+
+int16_t *
+navrad_get_audio_buf(unsigned nr, double volume, bool_t is_dme,
+    size_t *num_samples)
+{
+	radio_t *radio;
+	size_t samples = (!is_dme ? VOR_BUF_NUM_SAMPLES : DME_BUF_NUM_SAMPLES);
+	size_t step = (!is_dme ? VOR_TONE_NUM_SAMPLES : DME_TONE_NUM_SAMPLES);
+	avl_tree_t *tree;
+	int16_t *buf;
+	const int16_t *tone = (!is_dme ? dme_tone : vor_tone);
+	distort_t *distort;
+
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	radio = &navrad.radios[nr];
+	tree = (!is_dme ? &radio->vlocs : &radio->dmes);
+	distort = (!is_dme ? radio->distort_vloc : radio->distort_dme);
+
+	buf = get_audio_buf_type(radio, tree, volume, tone, step, samples,
+	    distort);
+
+	*num_samples = samples;
 	return (buf);
 }
 
@@ -859,5 +1444,6 @@ void
 navrad_done_audio(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
-	distort_clear_buffers(navrad.radios[nr].distort);
+	distort_clear_buffers(navrad.radios[nr].distort_vloc);
+	distort_clear_buffers(navrad.radios[nr].distort_dme);
 }

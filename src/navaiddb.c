@@ -270,7 +270,7 @@ parse_dme(char **comps, size_t n_comps, navaid_t **nav_pp)
 		free(nav);
 		return (B_FALSE);
 	}
-	strlcpy(nav->dme.rwy_id, comps[10], sizeof (nav->dme.rwy_id));
+	strlcpy(nav->dme.arpt_id, comps[10], sizeof (nav->dme.arpt_id));
 
 	*nav_pp = nav;
 	return (B_TRUE);

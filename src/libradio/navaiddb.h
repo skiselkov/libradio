@@ -101,7 +101,7 @@ typedef struct {
 		} mrk;
 		struct {
 			double		bias;		/* meters */
-			char		rwy_id[8];
+			char		arpt_id[8];
 		} dme;
 		struct {
 			double		crs;		/* degrees */

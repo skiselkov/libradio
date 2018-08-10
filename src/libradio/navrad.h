@@ -38,11 +38,15 @@ extern "C" {
 bool_t navrad_init(navaiddb_t *db);
 void navrad_fini(void);
 
-double navrad_get_bearing(unsigned nr, bool_t magnetic);
+double navrad_get_bearing(unsigned nr);
 double navrad_get_radial(unsigned nr);
 double navrad_get_dme(unsigned nr);
+double navrad_get_hdef(unsigned nr, bool_t pilot, bool_t *tofrom);
+double navrad_get_vdef(unsigned nr);
+bool_t navrad_is_loc(unsigned nr);
 
-int16_t *navrad_get_audio_buf(unsigned nr, double volume, size_t *num_samples);
+int16_t *navrad_get_audio_buf(unsigned nr, double volume, bool_t is_dme,
+    size_t *num_samples);
 void navrad_free_audio_buf(int16_t *buf);
 void navrad_done_audio(unsigned nr);
 
