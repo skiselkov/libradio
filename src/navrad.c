@@ -1204,10 +1204,6 @@ radio_vdef_update(radio_t *radio, double d_t)
 	FILTER_IN(radio->vdef_rate, (radio->vdef - radio->vdef_prev) / d_t,
 	    d_t, VDEF_RATE_UPD_RATE);
 	radio->vdef_prev = radio->vdef;
-
-	printf("angle:%.3f  eff:%.3f  error:%.3f  vdef:%.2f  rate:%.2f  "
-	    "signal:%.1f\n", angle, angle_eff, error, vdef,
-	    radio->vdef_rate, signal_db);
 }
 
 static void
