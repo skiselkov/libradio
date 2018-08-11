@@ -627,3 +627,30 @@ navaiddb_list_free(navaid_list_t *list)
 	free(list->navaids);
 	free(list);
 }
+
+const char *
+navaid_type2str(navaid_type_t type)
+{
+	switch (type) {
+	case NAVAID_NDB:
+		return ("NDB");
+	case NAVAID_VOR:
+		return ("VOR");
+	case NAVAID_LOC:
+		return ("LOC");
+	case NAVAID_GS:
+		return ("GS");
+	case NAVAID_MRK:
+		return ("MRK");
+	case NAVAID_DME:
+		return ("DME");
+	case NAVAID_FPAP:
+		return ("FPAP");
+	case NAVAID_LTP:
+		return ("TLS");
+	case NAVAID_GLS:
+		return ("GLS");
+	default:
+		VERIFY_MSG(0, "Invalid navaid type passed: %x\n", type);
+	}
+}

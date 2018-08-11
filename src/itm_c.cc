@@ -83,3 +83,22 @@ itm_point_to_pointMDH(double *elev, unsigned n_elev_pts, double distance,
 
 	return (errnum);
 }
+
+const char *
+itm_propmode2str(int propmode)
+{
+	switch (propmode) {
+	case ITM_PROPMODE_LOS:
+		return ("line of sight");
+	case ITM_PROPMODE_SH_DIFF:
+		return ("single horizon, diffraction");
+	case ITM_PROPMODE_SH_TROPO:
+		return ("single horizon, troposcatter");
+	case ITM_PROPMODE_DH_DIFF:
+		return ("double horizon, diffraction");
+	case ITM_PROPMODE_DH_TROPO:
+		return ("double horizon, troposcatter");
+	default:
+		return ("unknown");
+	}
+}

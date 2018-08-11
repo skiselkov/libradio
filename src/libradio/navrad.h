@@ -38,12 +38,14 @@ extern "C" {
 bool_t navrad_init(navaiddb_t *db);
 void navrad_fini(void);
 
+uint64_t navrad_get_freq(unsigned nr);
 double navrad_get_bearing(unsigned nr);
 double navrad_get_radial(unsigned nr);
 double navrad_get_dme(unsigned nr);
 double navrad_get_hdef(unsigned nr, bool_t pilot, bool_t *tofrom);
 double navrad_get_vdef(unsigned nr);
 bool_t navrad_is_loc(unsigned nr);
+bool_t navrad_get_ID(unsigned nr, char id[8]);
 
 int16_t *navrad_get_audio_buf(unsigned nr, double volume, bool_t is_dme,
     size_t *num_samples);

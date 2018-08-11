@@ -40,6 +40,7 @@
 #define	ANT_BASE_GAIN		92.0	/* dB */
 #define	INTERFERENCE_LIMIT	16.0	/* dB */
 #define	NOISE_FLOOR_AUDIO	-55.0	/* dB */
+#define	NOISE_FLOOR_NAV_ID	-63.0	/* dB */
 #define	NOISE_FLOOR_SIGNAL	-65.0	/* dB */
 #define	NOISE_FLOOR_TEST	-80.0	/* dB */
 #define	HDEF_MAX		2.5	/* dots */
@@ -63,6 +64,8 @@
 #define	DME_BUF_NUM_SAMPLES	4788
 
 #define	GS_AVG_FREQ		332000000	/* Hz */
+
+#define	MAX_DR_VALS		8
 
 static bool_t inited = B_FALSE;
 
@@ -113,6 +116,7 @@ typedef struct {
 	double		signal_db_omni;
 	double		signal_db_tgt;
 	bool_t		outdated;
+	int		propmode;
 
 	/*
 	 * Control chunks for the navaid audio generator. The value of
@@ -147,6 +151,17 @@ typedef struct {
 	avl_tree_t	vlocs;
 	avl_tree_t	gses;
 	avl_tree_t	dmes;
+
+	struct {
+		char		id[8];
+		dr_t		id_dr;
+		char		type[8];
+		dr_t		type_dr;
+		float		signal_db;
+		dr_t		signal_db_dr;
+		char		propmode[64];
+		dr_t		propmode_dr;
+	} dr_vals[MAX_DR_VALS];
 
 	struct {
 		dr_t	ovrd_nav_needles;
@@ -759,6 +774,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	    &propmode, NULL);
 
 	rnav->signal_db_tgt = ANT_BASE_GAIN - dbloss;
+	rnav->propmode = propmode;
 }
 
 /*
@@ -779,6 +795,7 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 {
 	uint64_t freq;
 	uint64_t dme_freq;
+	int i;
 
 	mutex_enter(&radio->lock);
 	freq = radio->freq;
@@ -791,9 +808,23 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 	 * Don't have to grab the lock here, since we're the only ones that
 	 * can modify the trees and we're not going to be doing so here.
 	 */
+	i = 0;
 	for (radio_navaid_t *rnav = avl_first(&radio->vlocs); rnav != NULL;
-	    rnav = AVL_NEXT(&radio->vlocs, rnav)) {
+	    rnav = AVL_NEXT(&radio->vlocs, rnav), i++) {
 		radio_navaid_recompute_signal(rnav, freq, pos, fpp);
+		if (i < MAX_DR_VALS) {
+			mutex_enter(&radio->lock);
+			strlcpy(radio->dr_vals[i].id, rnav->navaid->id,
+			    sizeof (radio->dr_vals[i].id));
+			strlcpy(radio->dr_vals[i].type,
+			    navaid_type2str(rnav->navaid->type),
+			    sizeof (radio->dr_vals[i].type));
+			radio->dr_vals[i].signal_db = rnav->signal_db;
+			strlcpy(radio->dr_vals[i].propmode,
+			    itm_propmode2str(rnav->propmode),
+			    sizeof (radio->dr_vals[i].propmode));
+			mutex_exit(&radio->lock);
+		}
 	}
 	for (radio_navaid_t *rnav = avl_first(&radio->gses); rnav != NULL;
 	    rnav = AVL_NEXT(&radio->gses, rnav)) {
@@ -883,6 +914,22 @@ radio_init(radio_t *radio, int nr)
 	radio->distort_vloc = distort_init(NAVRAD_AUDIO_SRATE);
 	radio->distort_dme = distort_init(NAVRAD_AUDIO_SRATE);
 
+	for (int i = 0; i < MAX_DR_VALS; i++) {
+		dr_create_b(&radio->dr_vals[i].id_dr, radio->dr_vals[i].id,
+		    sizeof (radio->dr_vals[i].id), B_FALSE,
+		    "libradio/radio%d/navaid%d/id", nr, i);
+		dr_create_b(&radio->dr_vals[i].type_dr, radio->dr_vals[i].type,
+		    sizeof (radio->dr_vals[i].type), B_FALSE,
+		    "libradio/radio%d/navaid%d/type", nr, i);
+		dr_create_f(&radio->dr_vals[i].signal_db_dr,
+		    &radio->dr_vals[i].signal_db, B_FALSE,
+		    "libradio/radio%d/navaid%d/signal_db", nr, i);
+		dr_create_b(&radio->dr_vals[i].propmode_dr,
+		    radio->dr_vals[i].propmode,
+		    sizeof (radio->dr_vals[i].propmode), B_FALSE,
+		    "libradio/radio%d/navaid%d/propmode", nr, i);
+	}
+
 	fdr_find(&radio->drs.ovrd_nav_needles,
 	    "sim/operation/override/override_nav%d_needles", nr);
 	fdr_find(&radio->drs.freq,
@@ -937,6 +984,13 @@ radio_fini(radio_t *radio)
 		distort_fini(radio->distort_vloc);
 	if (radio->distort_dme != NULL)
 		distort_fini(radio->distort_dme);
+
+	for (int i = 0; i < MAX_DR_VALS; i++) {
+		dr_delete(&radio->dr_vals[i].id_dr);
+		dr_delete(&radio->dr_vals[i].type_dr);
+		dr_delete(&radio->dr_vals[i].signal_db_dr);
+		dr_delete(&radio->dr_vals[i].propmode_dr);
+	}
 
 	dr_seti(&radio->drs.ovrd_nav_needles, 0);
 
@@ -1320,6 +1374,13 @@ navrad_fini(void)
 	XPLMUnregisterFlightLoopCallback(floop_cb, NULL);
 }
 
+uint64_t
+navrad_get_freq(unsigned nr)
+{
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	return (navrad.radios[nr].freq);
+}
+
 double
 navrad_get_bearing(unsigned nr)
 {
@@ -1360,6 +1421,27 @@ navrad_is_loc(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
 	return (is_valid_loc_freq(navrad.radios[nr].freq / 1000000.0));
+}
+
+bool_t
+navrad_get_ID(unsigned nr, char id[8])
+{
+	radio_t *radio;
+	navaid_t *nav;
+	double signal_db;
+
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	radio = &navrad.radios[nr];
+
+	mutex_enter(&radio->lock);
+	nav = radio_get_strongest_navaid(radio, &radio->vlocs, &signal_db);
+	mutex_exit(&radio->lock);
+
+	if (nav == NULL || signal_db < NOISE_FLOOR_NAV_ID)
+		return (B_FALSE);
+
+	strlcpy(id, nav->id, 8);
+	return (B_TRUE);
 }
 
 static int16_t *

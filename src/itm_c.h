@@ -103,12 +103,13 @@ typedef enum {
 #define	ITM_ACCUR_MAX			0.99
 #define	ITM_ACCUR_MIN			0.01
 
-int
-itm_point_to_pointMDH(double *elev, unsigned n_elev_pts, double distance,
+int itm_point_to_pointMDH(double *elev, unsigned n_elev_pts, double distance,
     double tht_m, double rht_m, double eps_dielect, double sgm_conductivity,
     double eno_ns_surfref, double frq_mhz, itm_env_t radio_climate,
     itm_pol_t pol, double time_accur, double loc_accur, double conf_accur,
     double *dbloss_p, int *propmode_p, double *deltaH_p);
+
+const char *itm_propmode2str(int propmode);
 
 #ifdef	__cplusplus
 }
