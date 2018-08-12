@@ -56,8 +56,9 @@
 #define	VDEF_RATE_UPD_RATE	0.2	/* FILTER_IN rate arg */
 #define	AP_STEER_UPD_RATE	0.25	/* FILTER_IN rate arg */
 #define	BRG_UPD_RATE		1.5	/* FILTER_IN rate arg */
-#define	DME_UPD_RATE		0.5	/* FILTER_IN rate arg */
+#define	DME_UPD_RATE		1	/* FILTER_IN rate arg */
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
+#define	DME_CHG_DELAY		1	/* seconds */
 
 #define	AUDIO_BUF_NUM_CHUNKS	110
 #define	VOR_BUF_NUM_SAMPLES	4800
@@ -134,6 +135,7 @@ typedef struct {
 
 	mutex_t		lock;
 	uint64_t	freq;
+	double		freq_chg_t;
 	double		hdef_pilot;
 	bool_t		tofrom_pilot;
 	double		hdef_copilot;
@@ -189,6 +191,7 @@ static struct {
 	mutex_t			lock;
 	geo_pos3_t		pos;
 	double			magvar;
+	double			cur_t;
 	double			last_t;
 
 	struct {
@@ -471,8 +474,8 @@ audio_buf_chunks_encode(radio_navaid_t *rnav)
 			}
 			j++;
 		}
-		/* add a single chunk space between letters */
-		j++;
+		/* add two chunks between letters */
+		j += 2;
 		ASSERT3U(j, <, AUDIO_BUF_NUM_CHUNKS);
 	}
 }
@@ -531,7 +534,8 @@ ap_drs_config(double d_t)
 
 	navrad.ap.hdef_prev = hdef;
 
-	if ((ap_state & AP_GS_ARM) && ABS(radio->vdef) < AP_GS_CAPTURE_VDEF) {
+	if ((ap_state & AP_GS_ARM) && (ap_state & AP_HNAV) &&
+	    ABS(radio->vdef) < AP_GS_CAPTURE_VDEF) {
 		dr_seti(&drs.ovrd_ap, 1);
 		dr_seti(&drs.ap_state, AP_GS_ARM | AP_GS);
 		navrad.ap.ovrd_act = B_TRUE;
@@ -554,7 +558,7 @@ ap_radio_drs_config(radio_t *radio)
 
 	dr_seti(&radio->drs.ovrd_nav_needles, 1);
 	hdef = radio_get_hdef(radio, B_TRUE, &tofrom);
-	if (!isnan(radio->hdef_pilot)) {
+	if (!isnan(hdef)) {
 		dr_setf(&radio->drs.hdef_pilot, hdef);
 		dr_seti(&radio->drs.fromto_pilot, 1 + tofrom);
 	} else {
@@ -596,9 +600,14 @@ ap_radio_drs_config(radio_t *radio)
 static void
 radio_floop_cb(radio_t *radio, double d_t)
 {
+	uint64_t new_freq = dr_getf(&radio->drs.freq) * 10000;
+
 	mutex_enter(&radio->lock);
 
-	radio->freq = dr_getf(&radio->drs.freq) * 10000;
+	if (radio->freq != new_freq) {
+		radio->freq = new_freq;
+		radio->freq_chg_t = navrad.cur_t;
+	}
 
 	signal_levels_update(&radio->vlocs, d_t);
 	signal_levels_update(&radio->gses, d_t);
@@ -839,8 +848,10 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 static float
 floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 {
-	double now = dr_getf(&drs.sim_time);
-	double d_t = ABS(now - navrad.last_t);
+	double d_t;
+
+	navrad.cur_t = dr_getf(&drs.sim_time);
+	d_t = ABS(navrad.cur_t - navrad.last_t);
 
 	UNUSED(elapsed1);
 	UNUSED(elapsed2);
@@ -860,7 +871,7 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 		radio_floop_cb(&navrad.radios[i], d_t);
 
 out:
-	navrad.last_t = now;
+	navrad.last_t = navrad.cur_t;
 
 	return (-1);
 }
@@ -1118,7 +1129,8 @@ radio_get_dme(radio_t *radio)
 	vect3_t pos_3d;
 	geo_pos3_t pos;
 
-	if (nav == NULL)
+	if (nav == NULL ||
+	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
 
 	mutex_enter(&navrad.lock);
@@ -1197,12 +1209,19 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 
 	if (!isnan(hdef)) {
 		if (pilot) {
-			FILTER_IN(radio->hdef_pilot, hdef, d_t, DEF_UPD_RATE);
+			FILTER_IN_NAN(radio->hdef_pilot, hdef, d_t,
+			    DEF_UPD_RATE);
 			radio->tofrom_pilot = tofrom;
 		} else {
-			FILTER_IN(radio->hdef_copilot, hdef, d_t, DEF_UPD_RATE);
+			FILTER_IN_NAN(radio->hdef_copilot, hdef, d_t,
+			    DEF_UPD_RATE);
 			radio->tofrom_copilot = tofrom;
 		}
+	} else {
+		if (pilot)
+			radio->hdef_pilot = NAN;
+		else
+			radio->hdef_copilot = NAN;
 	}
 }
 
@@ -1457,17 +1476,21 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		max_db = MAX(max_db, rnav->signal_db);
+		if (rnav->signal_db <= NOISE_FLOOR_SIGNAL)
+			continue;
+		/*
+		 * We use the navaid into the signal estimation only when
+		 * there is a tone on the frequency.
+		 */
+		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0)
+			max_db = MAX(max_db, rnav->signal_db);
 	}
+
 	span = max_db - NOISE_FLOOR_SIGNAL;
 	noise_level = (NOISE_FLOOR_AUDIO - NOISE_FLOOR_SIGNAL) / span;
 
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		rnav->cur_audio_chunk++;
-		if (rnav->cur_audio_chunk >= AUDIO_BUF_NUM_CHUNKS)
-			rnav->cur_audio_chunk = 0;
-
 		if (rnav->signal_db <= NOISE_FLOOR_SIGNAL)
 			continue;
 
@@ -1479,6 +1502,10 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 					buf[i + j] += tone[j] * level * 0.4;
 			}
 		}
+
+		rnav->cur_audio_chunk++;
+		if (rnav->cur_audio_chunk >= AUDIO_BUF_NUM_CHUNKS)
+			rnav->cur_audio_chunk = 0;
 	}
 
 	distort(distort_ctx, buf, num_samples, volume, noise_level * volume);
