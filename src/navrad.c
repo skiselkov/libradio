@@ -39,8 +39,9 @@
 #define	NAVAID_SRCH_RANGE	NM2MET(300)
 #define	ANT_BASE_GAIN		92.0	/* dB */
 #define	INTERFERENCE_LIMIT	16.0	/* dB */
-#define	NOISE_FLOOR_AUDIO	-55.0	/* dB */
-#define	NOISE_FLOOR_NAV_ID	-63.0	/* dB */
+#define	NOISE_LEVEL_AUDIO	-50.0	/* dB */
+#define	NOISE_FLOOR_AUDIO	-75.0	/* dB */
+#define	NOISE_FLOOR_NAV_ID	-68.0	/* dB */
 #define	NOISE_FLOOR_SIGNAL	-65.0	/* dB */
 #define	NOISE_FLOOR_TEST	-80.0	/* dB */
 #define	HDEF_MAX		2.5	/* dots */
@@ -265,7 +266,11 @@ static const char *morse_table[] = {
     "0011"	/* Z */
 };
 
+/*
+ * 1 KHz harmonic tone at 48 kHz sampling rate (48 samples).
+ */
 #define	VOR_TONE_NUM_SAMPLES	(NAVRAD_AUDIO_SRATE / 1000)
+CTASSERT(NAVRAD_AUDIO_SRATE % 1000 == 0);
 static const int16_t vor_tone[VOR_TONE_NUM_SAMPLES] = {
     0,
     4276,
@@ -317,44 +322,49 @@ static const int16_t vor_tone[VOR_TONE_NUM_SAMPLES] = {
     -4276
 };
 
+/*
+ * Unlike a VOR, a DME generates a square pattern at 1350 Hz. This doesn't
+ * divide our 48 kHz sampling rate evenly, so we instead fudge it and use
+ * a 1333 Hz tone. Close enough to not be perceptibly different.
+ */
 #define	DME_TONE_NUM_SAMPLES	36
 static const int16_t dme_tone[DME_TONE_NUM_SAMPLES] = {
-    0,
-    5689,
-    11206,
-    16383,
-    21062,
-    25100,
-    28377,
-    30790,
-    32269,
-    32766,
-    32269,
-    30790,
-    28377,
-    25100,
-    21062,
-    16383,
-    11206,
-    5689,
-    0,
-    -5689,
-    -11206,
-    -16383,
-    -21062,
-    -25100,
-    -28377,
-    -30790,
-    -32269,
-    -32766,
-    -32269,
-    -30790,
-    -28377,
-    -25101,
-    -21062,
-    -16383,
-    -11207,
-    -5689
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767,
+    -32767
 };
 
 static double brg2navaid(navaid_t *nav, double *dist);
@@ -377,10 +387,10 @@ comp_signal_db(radio_navaid_t *rnav)
 	    NULL_VECT2
 	};
 	const vect2_t loc_dist_curve[] = {
-	    VECT2(NM2MET(0), -27),
-	    VECT2(NM2MET(10), -27),
-	    VECT2(NM2MET(40), -17),
-	    VECT2(NM2MET(50), -17),
+	    VECT2(NM2MET(0), -30),
+	    VECT2(NM2MET(10), -30),
+	    VECT2(NM2MET(40), -20),
+	    VECT2(NM2MET(50), -20),
 	    NULL_VECT2
 	};
 	const vect2_t gs_dist_curve[] = {
@@ -1009,7 +1019,8 @@ radio_fini(radio_t *radio)
 }
 
 static navaid_t *
-radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree, double *signal_p)
+radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
+    double recv_floor, double *signal_p)
 {
 	radio_navaid_t *strongest = NULL, *second = NULL;
 	navaid_t *winner = NULL;
@@ -1020,7 +1031,7 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree, double *signal_p)
 	    rnav = AVL_NEXT(tree, rnav)) {
 		double signal_db = rnav->signal_db;
 
-		if (signal_db < NOISE_FLOOR_SIGNAL)
+		if (signal_db < recv_floor)
 			continue;
 		if (strongest == NULL)
 			strongest = rnav;
@@ -1052,7 +1063,7 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree, double *signal_p)
 }
 
 static double
-signal_error(navaid_t *nav, double brg, double signal_db, double dist)
+signal_error(navaid_t *nav, double brg, double signal_db)
 {
 	double pos_seed = crc64(&nav->pos, sizeof (nav->pos)) /
 	    (double)UINT64_MAX;
@@ -1061,8 +1072,7 @@ signal_error(navaid_t *nav, double brg, double signal_db, double dist)
 
 	signal_seed = POW4(signal_seed) * POW4(signal_seed);
 
-	return (signal_seed * sin(pos_seed + time_seed + brg / 20 +
-	    dist / 10000));
+	return (signal_seed * sin(pos_seed + time_seed + brg / 20));
 }
 
 static double
@@ -1090,14 +1100,14 @@ radio_get_bearing(radio_t *radio)
 {
 	double brg, error, signal_db, rng;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    &signal_db);
+	    NOISE_FLOOR_SIGNAL, &signal_db);
 	enum { MAX_ERROR = 10 };
 
 	if (nav == NULL || nav->type == NAVAID_LOC)
 		return (NAN);
 
 	brg = brg2navaid(nav, &rng);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db, rng);
+	error = MAX_ERROR * signal_error(nav, brg, signal_db);
 
 	return (brg + error);
 }
@@ -1107,14 +1117,14 @@ radio_get_radial(radio_t *radio)
 {
 	double radial, error, signal_db, rng;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    &signal_db);
+	    NOISE_FLOOR_SIGNAL, &signal_db);
 	enum { MAX_ERROR = 10 };
 
 	if (nav == NULL || nav->type == NAVAID_LOC)
 		return (NAN);
 
 	radial = normalize_hdg(brg2navaid(nav, &rng) + 180);
-	error = MAX_ERROR * signal_error(nav, radial, signal_db, rng);
+	error = MAX_ERROR * signal_error(nav, radial, signal_db);
 
 	return (normalize_hdg(radial + error - nav->vor.magvar));
 }
@@ -1124,7 +1134,7 @@ radio_get_dme(radio_t *radio)
 {
 	double dist, brg, rng, error, signal_db;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->dmes,
-	    &signal_db);
+	    NOISE_FLOOR_SIGNAL, &signal_db);
 	enum { MAX_ERROR = (unsigned)NM2MET(3) };
 	vect3_t pos_3d;
 	geo_pos3_t pos;
@@ -1141,7 +1151,7 @@ radio_get_dme(radio_t *radio)
 	dist = vect3_abs(vect3_sub(pos_3d, nav->ecef));
 
 	brg = brg2navaid(nav, &rng);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db, rng);
+	error = MAX_ERROR * signal_error(nav, brg, signal_db);
 
 	return (dist + error + nav->dme.bias);
 }
@@ -1151,14 +1161,14 @@ radio_comp_hdef_loc(radio_t *radio)
 {
 	double signal_db;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    &signal_db);
+	    NOISE_FLOOR_SIGNAL, &signal_db);
 	const double MAX_ERROR = 1.5;
 	double brg, dist, error, hdef;
 
 	if (nav == NULL)
 		return (NAN);
 	brg = brg2navaid(nav, &dist);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db, dist);
+	error = MAX_ERROR * signal_error(nav, brg, signal_db);
 	brg = normalize_hdg(brg + error);
 
 	hdef = rel_hdg(nav->loc.brg, brg) / HDEF_LOC_DEG_PER_DOT;
@@ -1198,7 +1208,7 @@ static void
 radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 {
 	double hdef;
-	bool_t tofrom;
+	bool_t tofrom = B_FALSE;
 
 	if (is_valid_loc_freq(radio->freq / 1000000.0)) {
 		hdef = radio_comp_hdef_loc(radio);
@@ -1230,7 +1240,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 {
 	double signal_db;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->gses,
-	    &signal_db);
+	    NOISE_FLOOR_SIGNAL, &signal_db);
 	double brg, dist, long_dist, d_elev, angle, vdef, error, angle_eff;
 	const double MAX_ERROR = 0.5, OFFPATH_MAX_ERROR = 4.0;
 	const double rand_coeffs[] = { M_PI, 2.12, 12.28, 35.12, 75.21 };
@@ -1259,7 +1269,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 		angle = 90;
 
 	signal_db += fx_lin_multi(ABS(angle), signal_angle_curve, B_TRUE);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db + 5, dist);
+	error = MAX_ERROR * signal_error(nav, brg, signal_db + 5);
 	error += OFFPATH_MAX_ERROR *
 	    sin(nav->gs.brg + offpath / rand_coeffs[0]) *
 	    sin(nav->gs.brg + offpath / rand_coeffs[1]) *
@@ -1453,10 +1463,11 @@ navrad_get_ID(unsigned nr, char id[8])
 	radio = &navrad.radios[nr];
 
 	mutex_enter(&radio->lock);
-	nav = radio_get_strongest_navaid(radio, &radio->vlocs, &signal_db);
+	nav = radio_get_strongest_navaid(radio, &radio->vlocs,
+	    NOISE_FLOOR_NAV_ID, &signal_db);
 	mutex_exit(&radio->lock);
 
-	if (nav == NULL || signal_db < NOISE_FLOOR_NAV_ID)
+	if (nav == NULL)
 		return (B_FALSE);
 
 	strlcpy(id, nav->id, 8);
@@ -1469,14 +1480,14 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
     distort_t *distort_ctx)
 {
 	int16_t *buf = calloc(num_samples, sizeof (*buf));
-	double max_db = NOISE_FLOOR_AUDIO;
+	double max_db = NOISE_LEVEL_AUDIO;
 	double span, noise_level;
 
 	mutex_enter(&radio->lock);
 
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		if (rnav->signal_db <= NOISE_FLOOR_SIGNAL)
+		if (rnav->signal_db <= NOISE_FLOOR_AUDIO)
 			continue;
 		/*
 		 * We use the navaid into the signal estimation only when
@@ -1486,20 +1497,20 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 			max_db = MAX(max_db, rnav->signal_db);
 	}
 
-	span = max_db - NOISE_FLOOR_SIGNAL;
-	noise_level = (NOISE_FLOOR_AUDIO - NOISE_FLOOR_SIGNAL) / span;
+	span = max_db - NOISE_FLOOR_AUDIO;
+	noise_level = (NOISE_LEVEL_AUDIO - NOISE_FLOOR_AUDIO) / span;
 
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		if (rnav->signal_db <= NOISE_FLOOR_SIGNAL)
+		if (rnav->signal_db <= NOISE_FLOOR_AUDIO)
 			continue;
 
 		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
 			double level =
-			    (rnav->signal_db - NOISE_FLOOR_SIGNAL) / span;
+			    (rnav->signal_db - NOISE_FLOOR_AUDIO) / span;
 			for (size_t i = 0; i < num_samples; i += step) {
 				for (size_t j = 0; j < step; j++)
-					buf[i + j] += tone[j] * level * 0.4;
+					buf[i + j] += tone[j] * POW2(level);
 			}
 		}
 
@@ -1508,7 +1519,8 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 			rnav->cur_audio_chunk = 0;
 	}
 
-	distort(distort_ctx, buf, num_samples, volume, noise_level * volume);
+	distort(distort_ctx, buf, num_samples, POW2(volume),
+	    POW2(noise_level * volume));
 
 	mutex_exit(&radio->lock);
 
