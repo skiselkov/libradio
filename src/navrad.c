@@ -1209,11 +1209,6 @@ radio_get_dme(radio_t *radio)
 
 	error = dist * MAX_ERROR * signal_error(nav, signal_db);
 
-	printf("mypos: %.4f x %.4f x %.0f  dist: %.0f  error: %.0f  "
-	    "bias: %.0f\n", pos.lat, pos.lon, pos.elev, dist, error,
-	    nav->dme.bias);
-	PRINT_VECT3(vect3_sub(pos_3d, nav->ecef));
-
 	return (dist + error + nav->dme.bias);
 }
 
