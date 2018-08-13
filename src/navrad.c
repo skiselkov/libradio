@@ -379,11 +379,18 @@ static void radio_dme_update(radio_t *radio, double d_t);
 static void
 comp_signal_db(radio_navaid_t *rnav)
 {
-	const vect2_t vordme_dist_curve[] = {
+	const vect2_t vor_dist_curve[] = {
 	    VECT2(NM2MET(0), -20),
 	    VECT2(NM2MET(20), -20),
 	    VECT2(NM2MET(100), 0),
 	    VECT2(NM2MET(120), 0),
+	    NULL_VECT2
+	};
+	const vect2_t dme_dist_curve[] = {
+	    VECT2(NM2MET(0), 0),
+	    VECT2(NM2MET(20), 0),
+	    VECT2(NM2MET(100), 20),
+	    VECT2(NM2MET(120), 20),
 	    NULL_VECT2
 	};
 	const vect2_t loc_dist_curve[] = {
@@ -423,9 +430,12 @@ comp_signal_db(radio_navaid_t *rnav)
 
 	switch (nav->type) {
 	case NAVAID_VOR:
+		rnav->signal_db = rnav->signal_db_omni +
+		    fx_lin_multi(nav->range, vor_dist_curve, B_TRUE);
+		break;
 	case NAVAID_DME:
-		rnav->signal_db = rnav->signal_db_omni -
-		    fx_lin_multi(nav->range, vordme_dist_curve, B_TRUE);
+		rnav->signal_db = rnav->signal_db_omni +
+		    fx_lin_multi(nav->range, dme_dist_curve, B_TRUE);
 		break;
 	case NAVAID_LOC:
 	case NAVAID_GS: {
@@ -495,9 +505,9 @@ signal_levels_update(avl_tree_t *tree, double d_t)
 {
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
+		comp_signal_db(rnav);
 		FILTER_IN(rnav->signal_db_omni, rnav->signal_db_tgt, d_t,
 		    USEC2SEC(WORKER_INTVAL));
-		comp_signal_db(rnav);
 	}
 }
 
@@ -810,11 +820,28 @@ vor2dme(uint64_t freq)
 }
 
 static void
+radio_dr_slot_populate(radio_t *radio, radio_navaid_t *rnav, unsigned nr)
+{
+	if (nr >= MAX_DR_VALS)
+		return;
+
+	mutex_enter(&radio->lock);
+	strlcpy(radio->dr_vals[nr].id, rnav->navaid->id,
+	    sizeof (radio->dr_vals[nr].id));
+	strlcpy(radio->dr_vals[nr].type, navaid_type2str(rnav->navaid->type),
+	    sizeof (radio->dr_vals[nr].type));
+	radio->dr_vals[nr].signal_db = rnav->signal_db;
+	strlcpy(radio->dr_vals[nr].propmode, itm_propmode2str(rnav->propmode),
+	    sizeof (radio->dr_vals[nr].propmode));
+	mutex_exit(&radio->lock);
+}
+
+static void
 radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 {
 	uint64_t freq;
 	uint64_t dme_freq;
-	int i;
+	unsigned dr_slot = 0;
 
 	mutex_enter(&radio->lock);
 	freq = radio->freq;
@@ -827,32 +854,30 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 	 * Don't have to grab the lock here, since we're the only ones that
 	 * can modify the trees and we're not going to be doing so here.
 	 */
-	i = 0;
 	for (radio_navaid_t *rnav = avl_first(&radio->vlocs); rnav != NULL;
-	    rnav = AVL_NEXT(&radio->vlocs, rnav), i++) {
+	    rnav = AVL_NEXT(&radio->vlocs, rnav)) {
 		radio_navaid_recompute_signal(rnav, freq, pos, fpp);
-		if (i < MAX_DR_VALS) {
-			mutex_enter(&radio->lock);
-			strlcpy(radio->dr_vals[i].id, rnav->navaid->id,
-			    sizeof (radio->dr_vals[i].id));
-			strlcpy(radio->dr_vals[i].type,
-			    navaid_type2str(rnav->navaid->type),
-			    sizeof (radio->dr_vals[i].type));
-			radio->dr_vals[i].signal_db = rnav->signal_db;
-			strlcpy(radio->dr_vals[i].propmode,
-			    itm_propmode2str(rnav->propmode),
-			    sizeof (radio->dr_vals[i].propmode));
-			mutex_exit(&radio->lock);
-		}
+		radio_dr_slot_populate(radio, rnav, dr_slot++);
 	}
 	for (radio_navaid_t *rnav = avl_first(&radio->gses); rnav != NULL;
 	    rnav = AVL_NEXT(&radio->gses, rnav)) {
 		radio_navaid_recompute_signal(rnav, GS_AVG_FREQ, pos, fpp);
+		radio_dr_slot_populate(radio, rnav, dr_slot++);
 	}
 	for (radio_navaid_t *rnav = avl_first(&radio->dmes); rnav != NULL;
 	    rnav = AVL_NEXT(&radio->dmes, rnav)) {
 		radio_navaid_recompute_signal(rnav, dme_freq, pos, fpp);
+		radio_dr_slot_populate(radio, rnav, dr_slot++);
 	}
+
+	mutex_enter(&radio->lock);
+	for (; dr_slot < MAX_DR_VALS; dr_slot++) {
+		if (radio->dr_vals[dr_slot].id[0] != '\0') {
+			memset(&radio->dr_vals[dr_slot], 0,
+			    sizeof (radio->dr_vals[dr_slot]));
+		}
+	}
+	mutex_exit(&radio->lock);
 }
 
 static float
