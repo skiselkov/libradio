@@ -54,10 +54,10 @@
 #define	HSENS_LOC		12.0	/* dot deflection per deg correction */
 #define	HDEF_FEEDBACK		15	/* dots per second */
 #define	MAX_INTCPT_ANGLE	30	/* degrees */
-#define	HDEF_RATE_UPD_RATE	0.2	/* FILTER_IN rate arg */
-#define	VDEF_RATE_UPD_RATE	0.2	/* FILTER_IN rate arg */
+#define	HDEF_RATE_UPD_RATE	0.4	/* FILTER_IN rate arg */
+#define	VDEF_RATE_UPD_RATE	0.4	/* FILTER_IN rate arg */
 #define	AP_STEER_UPD_RATE	0.25	/* FILTER_IN rate arg */
-#define	BRG_UPD_RATE		1.5	/* FILTER_IN rate arg */
+#define	BRG_UPD_RATE		2.5	/* FILTER_IN rate arg */
 #define	DME_UPD_RATE		1	/* FILTER_IN rate arg */
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
 #define	DME_CHG_DELAY		1	/* seconds */
@@ -122,6 +122,11 @@ typedef struct {
 	double		signal_db_tgt;
 	bool_t		outdated;
 	int		propmode;
+
+	/* Only valid for VORs! */
+	double		gnd_dist;
+	double		slant_angle;
+	double		radial_degt;
 
 	/*
 	 * Control chunks for the navaid audio generator. The value of
@@ -384,7 +389,7 @@ static void radio_brg_update(radio_t *radio, double d_t);
 static void radio_dme_update(radio_t *radio, double d_t);
 
 static void
-comp_signal_db(radio_navaid_t *rnav)
+comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp)
 {
 	const vect2_t vor_dist_curve[] = {
 	    VECT2(NM2MET(0), -20),
@@ -443,10 +448,38 @@ comp_signal_db(radio_navaid_t *rnav)
 	ASSERT(nav != NULL);
 
 	switch (nav->type) {
-	case NAVAID_VOR:
+	case NAVAID_VOR: {
+		double angle_error = 0;
+
+		if (rnav->propmode == ITM_PROPMODE_LOS) {
+			vect2_t pos_2d = geo2fpp(GEO3_TO_GEO2(nav->pos), fpp);
+			const vect2_t angle_corr_curve[] = {
+			    VECT2(-5, -50),
+			    VECT2(-2.5, -20),
+			    VECT2(0, -10),
+			    VECT2(10, -3),
+			    VECT2(20, 0),
+			    VECT2(30, 0),
+			    VECT2(40, -3),
+			    VECT2(50, -10),
+			    VECT2(60, -20),
+			    VECT2(90, -60),
+			    NULL_VECT2
+			};
+
+			rnav->radial_degt = dir2hdg(pos_2d);
+			rnav->gnd_dist = MAX(vect2_abs(pos_2d), 1);
+			rnav->slant_angle = RAD2DEG(atan((navrad.pos.elev -
+			    nav->pos.elev) / rnav->gnd_dist));
+			angle_error = fx_lin_multi(rnav->slant_angle,
+			    angle_corr_curve, B_TRUE);
+		}
+
 		rnav->signal_db = rnav->signal_db_omni +
-		    fx_lin_multi(nav->range, vor_dist_curve, B_TRUE);
+		    fx_lin_multi(nav->range, vor_dist_curve, B_TRUE) +
+		    angle_error;
 		break;
+	}
 	case NAVAID_DME:
 		if (is_valid_loc_freq(nav->freq / 1000000.0)) {
 			rnav->signal_db = rnav->signal_db_omni +
@@ -521,13 +554,13 @@ audio_buf_chunks_encode(radio_navaid_t *rnav)
 }
 
 static void
-signal_levels_update(avl_tree_t *tree, double d_t)
+signal_levels_update(avl_tree_t *tree, double d_t, fpp_t *fpp)
 {
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		comp_signal_db(rnav);
 		FILTER_IN(rnav->signal_db_omni, rnav->signal_db_tgt, d_t,
 		    USEC2SEC(WORKER_INTVAL));
+		comp_signal_db(rnav, fpp);
 	}
 }
 
@@ -641,6 +674,8 @@ static void
 radio_floop_cb(radio_t *radio, double d_t)
 {
 	uint64_t new_freq = dr_getf(&radio->drs.freq) * 10000;
+	fpp_t fpp = gnomo_fpp_init(GEO3_TO_GEO2(navrad.pos), 0, &wgs84,
+	    B_FALSE);
 
 	mutex_enter(&radio->lock);
 
@@ -649,9 +684,9 @@ radio_floop_cb(radio_t *radio, double d_t)
 		radio->freq_chg_t = navrad.cur_t;
 	}
 
-	signal_levels_update(&radio->vlocs, d_t);
-	signal_levels_update(&radio->gses, d_t);
-	signal_levels_update(&radio->dmes, d_t);
+	signal_levels_update(&radio->vlocs, d_t, &fpp);
+	signal_levels_update(&radio->gses, d_t, &fpp);
+	signal_levels_update(&radio->dmes, d_t, &fpp);
 
 	ap_drs_config(d_t);
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
@@ -779,8 +814,16 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	int propmode, error;
 	double water_fract = 0;
 	double elev_test[2] = {0, 0};
+	itm_pol_t pol;
 
 	ASSERT(!IS_NULL_VECT(v));
+
+	if (nav->type == NAVAID_VOR || nav->type == NAVAID_LOC ||
+	    nav->type == NAVAID_GS) {
+		pol = ITM_POL_HORIZ;
+	} else {
+		pol = ITM_POL_VERT;
+	}
 
 	/*
 	 * Some navaids will be below our radio horizon. Just perform a quick
@@ -789,7 +832,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	 */
 	error = itm_point_to_pointMDH(elev_test, 2, dist, nav->pos.elev + 10,
 	    pos.elev, ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG, ITM_NS_AVG,
-	    freq / 1000000.0, ITM_ENV_CONTINENTAL_TEMPERATE, ITM_POL_VERT,
+	    freq / 1000000.0, ITM_ENV_CONTINENTAL_TEMPERATE, pol,
 	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
 	if (error > ITM_RESULT_ERANGE_MULTI) {
 		if (rnav->signal_db_tgt == 0)
@@ -826,8 +869,8 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 
 	error = itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
 	    nav->pos.elev + 10, pos.elev, dielec, conduct, ITM_NS_AVG,
-	    (freq / 1000000.0), ITM_ENV_CONTINENTAL_TEMPERATE,
-	    ITM_POL_VERT, ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss,
+	    (freq / 1000000.0), ITM_ENV_CONTINENTAL_TEMPERATE, pol,
+	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss,
 	    &propmode, NULL);
 	if (error > ITM_RESULT_ERANGE_MULTI)
 		return;
@@ -1073,12 +1116,12 @@ radio_fini(radio_t *radio)
 	mutex_destroy(&radio->lock);
 }
 
-static navaid_t *
+static radio_navaid_t *
 radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
-    double recv_floor, double *signal_p)
+    double recv_floor)
 {
 	radio_navaid_t *strongest = NULL, *second = NULL;
-	navaid_t *winner = NULL;
+	radio_navaid_t *winner = NULL;
 
 	mutex_enter(&radio->lock);
 
@@ -1104,12 +1147,8 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 	if (second != NULL &&
 	    strongest->signal_db - second->signal_db < INTERFERENCE_LIMIT) {
 		strongest = NULL;
-		if (signal_p != NULL)
-			*signal_p = NAN;
 	} else if (strongest != NULL) {
-		winner = strongest->navaid;
-		if (signal_p != NULL)
-			*signal_p = strongest->signal_db;
+		winner = strongest;
 	}
 
 	mutex_exit(&radio->lock);
@@ -1151,11 +1190,30 @@ brg2navaid(navaid_t *nav, double *dist)
 }
 
 static double
+vor_cone_error(radio_navaid_t *rnav)
+{
+	double f = clamp((rnav->slant_angle - 60) / 30, 0, 1);
+	double fact = POW3(f);
+	navaid_t *nav = rnav->navaid;
+	double freq = nav->freq / 1000000.0;
+	enum { MAX_ERROR = 20 };
+	/*
+	 * We use the current radial to see the randomizer, but amplify the
+	 * radial value to amplify any small variations. Also use the VOR
+	 * frequency to provide a more unique randomized response for every
+	 * VOR.
+	 */
+	return (MAX_ERROR * fact * sin(rnav->radial_degt * 2.1 + freq) *
+	    sin(rnav->radial_degt * 4.35 + freq));
+}
+
+static double
 radio_get_bearing(radio_t *radio)
 {
-	double brg, error, signal_db;
-	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_SIGNAL, &signal_db);
+	double brg, error;
+	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
+	    NOISE_FLOOR_SIGNAL);
+	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	enum { MAX_ERROR = 3 };
 
 	if (nav == NULL || nav->type == NAVAID_LOC ||
@@ -1163,17 +1221,19 @@ radio_get_bearing(radio_t *radio)
 		return (NAN);
 
 	brg = brg2navaid(nav, NULL);
-	error = MAX_ERROR * signal_error(nav, signal_db);
+	error = MAX_ERROR * signal_error(nav, rnav->signal_db) +
+	    vor_cone_error(rnav);
 
-	return (brg + error);
+	return (normalize_hdg(brg + error));
 }
 
 static double
 radio_get_radial(radio_t *radio)
 {
-	double radial, error, signal_db;
-	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_SIGNAL, &signal_db);
+	double radial, error;
+	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
+	    NOISE_FLOOR_SIGNAL);
+	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	enum { MAX_ERROR = 3 };
 
 	if (nav == NULL || nav->type == NAVAID_LOC ||
@@ -1181,7 +1241,8 @@ radio_get_radial(radio_t *radio)
 		return (NAN);
 
 	radial = normalize_hdg(brg2navaid(nav, NULL) + 180);
-	error = MAX_ERROR * signal_error(nav, signal_db);
+	error = MAX_ERROR * signal_error(nav, rnav->signal_db) +
+	    vor_cone_error(rnav);
 
 	return (normalize_hdg(radial + error - nav->vor.magvar));
 }
@@ -1189,9 +1250,10 @@ radio_get_radial(radio_t *radio)
 static double
 radio_get_dme(radio_t *radio)
 {
-	double dist, error, signal_db;
-	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->dmes,
-	    NOISE_FLOOR_SIGNAL, &signal_db);
+	double dist, error;
+	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->dmes,
+	    NOISE_FLOOR_SIGNAL);
+	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	vect3_t pos_3d;
 	geo_pos3_t pos;
 	const double MAX_ERROR = 0.025;
@@ -1207,7 +1269,7 @@ radio_get_dme(radio_t *radio)
 	pos_3d = geo2ecef_mtr(pos, &wgs84);
 	dist = vect3_abs(vect3_sub(pos_3d, nav->ecef));
 
-	error = dist * MAX_ERROR * signal_error(nav, signal_db);
+	error = dist * MAX_ERROR * signal_error(nav, rnav->signal_db);
 
 	return (dist + error + nav->dme.bias);
 }
@@ -1215,9 +1277,9 @@ radio_get_dme(radio_t *radio)
 static double
 radio_comp_hdef_loc(radio_t *radio)
 {
-	double signal_db;
-	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_SIGNAL, &signal_db);
+	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
+	    NOISE_FLOOR_SIGNAL);
+	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	const double MAX_ERROR = 1.5;
 	double brg, error, hdef;
 
@@ -1226,7 +1288,7 @@ radio_comp_hdef_loc(radio_t *radio)
 		return (NAN);
 	}
 	brg = brg2navaid(nav, NULL);
-	error = MAX_ERROR * signal_error(nav, signal_db);
+	error = MAX_ERROR * signal_error(nav, rnav->signal_db);
 	brg = normalize_hdg(brg + error);
 
 	hdef = rel_hdg(nav->loc.brg, brg) / HDEF_LOC_DEG_PER_DOT;
@@ -1300,9 +1362,10 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 static void
 radio_vdef_update(radio_t *radio, double d_t)
 {
-	double signal_db;
-	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->gses,
-	    NOISE_FLOOR_SIGNAL, &signal_db);
+	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->gses,
+	    NOISE_FLOOR_SIGNAL);
+	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
+	double signal_db = (rnav != NULL ? rnav->signal_db : 0);
 	double brg, dist, long_dist, d_elev, angle, vdef, error, angle_eff;
 	const double MAX_ERROR = 0.5, OFFPATH_MAX_ERROR = 4.0;
 	const double rand_coeffs[] = { M_PI, 2.12, 12.28, 35.12, 75.21 };
@@ -1535,18 +1598,20 @@ navrad_get_ID(unsigned nr, char id[8])
 {
 	radio_t *radio;
 	navaid_t *nav;
-	double signal_db;
+	radio_navaid_t *rnav;
 
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
 	radio = &navrad.radios[nr];
 
 	mutex_enter(&radio->lock);
-	nav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_NAV_ID, &signal_db);
-	mutex_exit(&radio->lock);
-
-	if (nav == NULL)
+	rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
+	    NOISE_FLOOR_NAV_ID);
+	if (rnav == NULL) {
+		mutex_exit(&radio->lock);
 		return (B_FALSE);
+	}
+	nav = rnav->navaid;
+	mutex_exit(&radio->lock);
 
 	strlcpy(id, nav->id, 8);
 	return (B_TRUE);
