@@ -393,6 +393,13 @@ comp_signal_db(radio_navaid_t *rnav)
 	    VECT2(NM2MET(120), 20),
 	    NULL_VECT2
 	};
+	const vect2_t ils_dme_dist_curve[] = {
+	    VECT2(NM2MET(0), -9),
+	    VECT2(NM2MET(20), -9),
+	    VECT2(NM2MET(100), 11),
+	    VECT2(NM2MET(120), 11),
+	    NULL_VECT2
+	};
 	const vect2_t loc_dist_curve[] = {
 	    VECT2(NM2MET(0), -30),
 	    VECT2(NM2MET(10), -30),
@@ -434,8 +441,14 @@ comp_signal_db(radio_navaid_t *rnav)
 		    fx_lin_multi(nav->range, vor_dist_curve, B_TRUE);
 		break;
 	case NAVAID_DME:
-		rnav->signal_db = rnav->signal_db_omni +
-		    fx_lin_multi(nav->range, dme_dist_curve, B_TRUE);
+		if (is_valid_loc_freq(nav->freq / 1000000.0)) {
+			rnav->signal_db = rnav->signal_db_omni +
+			    fx_lin_multi(nav->range, ils_dme_dist_curve,
+			    B_TRUE);
+		} else {
+			rnav->signal_db = rnav->signal_db_omni +
+			    fx_lin_multi(nav->range, dme_dist_curve, B_TRUE);
+		}
 		break;
 	case NAVAID_LOC:
 	case NAVAID_GS: {
@@ -872,10 +885,10 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 
 	mutex_enter(&radio->lock);
 	for (; dr_slot < MAX_DR_VALS; dr_slot++) {
-		if (radio->dr_vals[dr_slot].id[0] != '\0') {
-			memset(&radio->dr_vals[dr_slot], 0,
-			    sizeof (radio->dr_vals[dr_slot]));
-		}
+		radio->dr_vals[dr_slot].id[0] = '\0';
+		radio->dr_vals[dr_slot].type[0] = '\0';
+		radio->dr_vals[dr_slot].signal_db = 0;
+		radio->dr_vals[dr_slot].propmode[0] = '\0';
 	}
 	mutex_exit(&radio->lock);
 }
