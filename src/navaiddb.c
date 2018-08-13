@@ -151,7 +151,7 @@ parse_navaid_common(char **comps, size_t n_comps, navaid_type_t type,
 		return (NULL);
 	}
 
-	nav->ecef = geo2ecef(nav->pos, &wgs84);
+	nav->ecef = geo2ecef_mtr(nav->pos, &wgs84);
 
 	return (nav);
 }

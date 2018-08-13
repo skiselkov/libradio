@@ -44,6 +44,7 @@
 #define	NOISE_FLOOR_NAV_ID	-68.0	/* dB */
 #define	NOISE_FLOOR_SIGNAL	-65.0	/* dB */
 #define	NOISE_FLOOR_TEST	-80.0	/* dB */
+#define	NOISE_FLOOR_TOO_FAR	-100.0	/* dB */
 #define	HDEF_MAX		2.5	/* dots */
 #define	VDEF_MAX		2.5	/* dots */
 #define	HDEF_VOR_DEG_PER_DOT	2.0	/* degrees per dot */
@@ -66,6 +67,8 @@
 #define	DME_BUF_NUM_SAMPLES	4788
 
 #define	GS_AVG_FREQ		332000000	/* Hz */
+
+#define	NAVRAD_LOCK_DELAY	3	/* seconds */
 
 #define	MAX_DR_VALS		8
 
@@ -141,15 +144,19 @@ typedef struct {
 	bool_t		tofrom_pilot;
 	double		hdef_copilot;
 	bool_t		tofrom_copilot;
+	double		hdef_lock_t;
 	double		gs;
 	distort_t	*distort_vloc;
 	distort_t	*distort_dme;
 	double		brg;
+	double		brg_lock_t;
 	double		dme;
+	double		dme_lock_t;
 
 	double		vdef;
 	double		vdef_prev;
 	double		vdef_rate;
+	double		vdef_lock_t;
 
 	avl_tree_t	vlocs;
 	avl_tree_t	gses;
@@ -704,6 +711,9 @@ radio_refresh_navaid_list_type(radio_t *radio, avl_tree_t *tree,
 			audio_buf_chunks_encode(rnav);
 			rnav->cur_audio_chunk =
 			    crc64_rand() % AUDIO_BUF_NUM_CHUNKS;
+			rnav->signal_db = NOISE_FLOOR_TOO_FAR;
+			rnav->signal_db_omni = NOISE_FLOOR_TOO_FAR;
+			rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
 			avl_insert(tree, rnav, where);
 		} else {
 			rnav->outdated = B_FALSE;
@@ -766,7 +776,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	double dist = clamp(vect2_abs(v), MIN_DIST, MAX_DIST);
 	egpws_terr_probe_t probe;
 	double dbloss, water_part, water_length, dielec, conduct, water_conduct;
-	int propmode;
+	int propmode, error;
 	double water_fract = 0;
 	double elev_test[2] = {0, 0};
 
@@ -777,12 +787,17 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	 * "best case" test for them and discard them if there's no chance
 	 * that they'll be visible.
 	 */
-	itm_point_to_pointMDH(elev_test, 2, dist, nav->pos.elev + 10, pos.elev,
-	    ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG, ITM_NS_AVG,
+	error = itm_point_to_pointMDH(elev_test, 2, dist, nav->pos.elev + 10,
+	    pos.elev, ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG, ITM_NS_AVG,
 	    freq / 1000000.0, ITM_ENV_CONTINENTAL_TEMPERATE, ITM_POL_VERT,
 	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
+	if (error > ITM_RESULT_ERANGE_MULTI) {
+		if (rnav->signal_db_tgt == 0)
+			rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
+		return;
+	}
 	if (ANT_BASE_GAIN - dbloss < NOISE_FLOOR_TEST) {
-		rnav->signal_db_tgt = ANT_BASE_GAIN - dbloss;
+		rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
 		return;
 	}
 
@@ -809,11 +824,13 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	dielec = wavg(ITM_DIELEC_GND_AVG, ITM_DIELEC_WATER_FRESH, water_fract);
 	conduct = wavg(ITM_CONDUCT_GND_AVG, water_conduct, water_fract);
 
-	itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
+	error = itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
 	    nav->pos.elev + 10, pos.elev, dielec, conduct, ITM_NS_AVG,
 	    (freq / 1000000.0), ITM_ENV_CONTINENTAL_TEMPERATE,
 	    ITM_POL_VERT, ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss,
 	    &propmode, NULL);
+	if (error > ITM_RESULT_ERANGE_MULTI)
+		return;
 
 	rnav->signal_db_tgt = ANT_BASE_GAIN - dbloss;
 	rnav->propmode = propmode;
@@ -1101,16 +1118,16 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 }
 
 static double
-signal_error(navaid_t *nav, double brg, double signal_db)
+signal_error(navaid_t *nav, double signal_db)
 {
 	double pos_seed = crc64(&nav->pos, sizeof (nav->pos)) /
 	    (double)UINT64_MAX;
-	double time_seed = navrad.last_t / 1800.0;
+	double time_seed = navrad.last_t / 3600.0;
 	double signal_seed = clamp(signal_db / NOISE_FLOOR_SIGNAL, 0, 1);
 
 	signal_seed = POW4(signal_seed) * POW4(signal_seed);
 
-	return (signal_seed * sin(pos_seed + time_seed + brg / 20));
+	return (signal_seed * sin(pos_seed + time_seed));
 }
 
 static double
@@ -1136,16 +1153,17 @@ brg2navaid(navaid_t *nav, double *dist)
 static double
 radio_get_bearing(radio_t *radio)
 {
-	double brg, error, signal_db, rng;
+	double brg, error, signal_db;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    NOISE_FLOOR_SIGNAL, &signal_db);
-	enum { MAX_ERROR = 10 };
+	enum { MAX_ERROR = 3 };
 
-	if (nav == NULL || nav->type == NAVAID_LOC)
+	if (nav == NULL || nav->type == NAVAID_LOC ||
+	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
 
-	brg = brg2navaid(nav, &rng);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db);
+	brg = brg2navaid(nav, NULL);
+	error = MAX_ERROR * signal_error(nav, signal_db);
 
 	return (brg + error);
 }
@@ -1153,16 +1171,17 @@ radio_get_bearing(radio_t *radio)
 static double
 radio_get_radial(radio_t *radio)
 {
-	double radial, error, signal_db, rng;
+	double radial, error, signal_db;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    NOISE_FLOOR_SIGNAL, &signal_db);
-	enum { MAX_ERROR = 10 };
+	enum { MAX_ERROR = 3 };
 
-	if (nav == NULL || nav->type == NAVAID_LOC)
+	if (nav == NULL || nav->type == NAVAID_LOC ||
+	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
 
-	radial = normalize_hdg(brg2navaid(nav, &rng) + 180);
-	error = MAX_ERROR * signal_error(nav, radial, signal_db);
+	radial = normalize_hdg(brg2navaid(nav, NULL) + 180);
+	error = MAX_ERROR * signal_error(nav, signal_db);
 
 	return (normalize_hdg(radial + error - nav->vor.magvar));
 }
@@ -1170,12 +1189,12 @@ radio_get_radial(radio_t *radio)
 static double
 radio_get_dme(radio_t *radio)
 {
-	double dist, brg, rng, error, signal_db;
+	double dist, error, signal_db;
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->dmes,
 	    NOISE_FLOOR_SIGNAL, &signal_db);
-	enum { MAX_ERROR = (unsigned)NM2MET(3) };
 	vect3_t pos_3d;
 	geo_pos3_t pos;
+	const double MAX_ERROR = 0.025;
 
 	if (nav == NULL ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
@@ -1185,11 +1204,15 @@ radio_get_dme(radio_t *radio)
 	pos = navrad.pos;
 	mutex_exit(&navrad.lock);
 
-	pos_3d = geo2ecef(pos, &wgs84);
+	pos_3d = geo2ecef_mtr(pos, &wgs84);
 	dist = vect3_abs(vect3_sub(pos_3d, nav->ecef));
 
-	brg = brg2navaid(nav, &rng);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db);
+	error = dist * MAX_ERROR * signal_error(nav, signal_db);
+
+	printf("mypos: %.4f x %.4f x %.0f  dist: %.0f  error: %.0f  "
+	    "bias: %.0f\n", pos.lat, pos.lon, pos.elev, dist, error,
+	    nav->dme.bias);
+	PRINT_VECT3(vect3_sub(pos_3d, nav->ecef));
 
 	return (dist + error + nav->dme.bias);
 }
@@ -1201,12 +1224,14 @@ radio_comp_hdef_loc(radio_t *radio)
 	navaid_t *nav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    NOISE_FLOOR_SIGNAL, &signal_db);
 	const double MAX_ERROR = 1.5;
-	double brg, dist, error, hdef;
+	double brg, error, hdef;
 
-	if (nav == NULL)
+	if (nav == NULL ||
+	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY) {
 		return (NAN);
-	brg = brg2navaid(nav, &dist);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db);
+	}
+	brg = brg2navaid(nav, NULL);
+	error = MAX_ERROR * signal_error(nav, signal_db);
 	brg = normalize_hdg(brg + error);
 
 	hdef = rel_hdg(nav->loc.brg, brg) / HDEF_LOC_DEG_PER_DOT;
@@ -1256,6 +1281,9 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 	}
 
 	if (!isnan(hdef)) {
+		if (ABS(navrad.cur_t - radio->hdef_lock_t) < NAVRAD_LOCK_DELAY)
+			return;
+
 		if (pilot) {
 			FILTER_IN_NAN(radio->hdef_pilot, hdef, d_t,
 			    DEF_UPD_RATE);
@@ -1270,6 +1298,7 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 			radio->hdef_pilot = NAN;
 		else
 			radio->hdef_copilot = NAN;
+		radio->hdef_lock_t = NAN;
 	}
 }
 
@@ -1294,8 +1323,12 @@ radio_vdef_update(radio_t *radio, double d_t)
 	if (nav == NULL) {
 		radio->vdef = NAN;
 		radio->gs = NAN;
+		radio->vdef_lock_t = navrad.cur_t;
 		return;
 	}
+
+	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY)
+		return;
 
 	brg = brg2navaid(nav, &dist);
 	offpath = fabs(rel_hdg(brg, nav->gs.brg));
@@ -1307,7 +1340,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 		angle = 90;
 
 	signal_db += fx_lin_multi(ABS(angle), signal_angle_curve, B_TRUE);
-	error = MAX_ERROR * signal_error(nav, brg, signal_db + 5);
+	error = MAX_ERROR * signal_error(nav, signal_db + 5);
 	error += OFFPATH_MAX_ERROR *
 	    sin(nav->gs.brg + offpath / rand_coeffs[0]) *
 	    sin(nav->gs.brg + offpath / rand_coeffs[1]) *
@@ -1333,6 +1366,8 @@ radio_brg_update(radio_t *radio, double d_t)
 	double brg = radio_get_bearing(radio);
 
 	if (!isnan(brg)) {
+		if (ABS(navrad.cur_t - radio->brg_lock_t) < NAVRAD_LOCK_DELAY)
+			return;
 		if (isnan(radio->brg))
 			radio->brg = 0;
 		brg = normalize_hdg(brg - dr_getf(&drs.hdg));
@@ -1341,13 +1376,23 @@ radio_brg_update(radio_t *radio, double d_t)
 		FILTER_IN(radio->brg, brg, d_t, BRG_UPD_RATE);
 	} else {
 		radio->brg = NAN;
+		radio->brg_lock_t = navrad.cur_t;
 	}
 }
 
 static void
 radio_dme_update(radio_t *radio, double d_t)
 {
-	FILTER_IN_NAN(radio->dme, radio_get_dme(radio), d_t, DME_UPD_RATE);
+	double dme = radio_get_dme(radio);
+
+	if (!isnan(dme)) {
+		if (ABS(navrad.cur_t - radio->dme_lock_t) < NAVRAD_LOCK_DELAY)
+			return;
+		FILTER_IN_NAN(radio->dme, dme, d_t, DME_UPD_RATE);
+	} else {
+		radio->dme = NAN;
+		radio->dme_lock_t = navrad.cur_t;
+	}
 }
 
 static double
