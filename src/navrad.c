@@ -16,6 +16,8 @@
  * Copyright 2018 Saso Kiselkov. All rights reserved.
  */
 
+#include <time.h>
+
 #include <XPLMPlugin.h>
 #include <XPLMProcessing.h>
 #include <XPLMUtilities.h>
@@ -23,6 +25,7 @@
 #include <acfutils/crc64.h>
 #include <acfutils/dr.h>
 #include <acfutils/math.h>
+#include <acfutils/mt_cairo_render.h>
 #include <acfutils/perf.h>
 #include <acfutils/worker.h>
 #include <acfutils/time.h>
@@ -71,6 +74,16 @@
 #define	NAVRAD_LOCK_DELAY	3	/* seconds */
 
 #define	MAX_DR_VALS		8
+
+/*
+ * Terrain profile debugging suport.
+ * To enable dumping of the terrain profile passed to ITM into a file
+ * called "navaid_profile.png" in X-Plane's root directory, define the
+ * following two macros:
+ *
+ * #define	DEBUG_NAVAID_PROFILE		"<ID>"
+ * #define	DEBUG_NAVAID_PROFILE_TYPE	NAVAID_<type>
+ */
 
 static bool_t inited = B_FALSE;
 
@@ -387,6 +400,8 @@ static double radio_get_bearing(radio_t *radio);
 static double radio_get_dme(radio_t *radio);
 static void radio_brg_update(radio_t *radio, double d_t);
 static void radio_dme_update(radio_t *radio, double d_t);
+static void debug_navaid_profile_dump(double *elev, size_t num_pts,
+    double pos1, double pos2) UNUSED_ATTR;
 
 static void
 comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp)
@@ -795,6 +810,67 @@ radio_refresh_navaid_list(radio_t *radio, geo_pos2_t pos, uint64_t freq)
 }
 
 static void
+debug_navaid_profile_dump(double *elev, size_t num_pts, double pos1,
+    double pos2)
+{
+	static time_t last_dump = 0;
+	time_t now = time(NULL);
+	double max_elev = 10;
+	cairo_t *cr;
+	cairo_surface_t *surf;
+	enum { WIDTH = 1920, HEIGHT = 500, CIRCLE_R = 10 };
+	double scale_x, scale_y;
+
+	if (now - last_dump < 5)
+		return;
+	last_dump = now;
+
+	for (size_t i = 0; i < num_pts; i++)
+		max_elev = MAX(max_elev, elev[i]);
+	max_elev = MAX(max_elev, pos1 + 10);
+	max_elev = MAX(max_elev, pos2 + 10);
+	scale_x = WIDTH / (double)(num_pts - 1);
+	scale_y = HEIGHT / max_elev;
+
+	surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, WIDTH, HEIGHT);
+	cr = cairo_create(surf);
+
+	cairo_set_source_rgb(cr, 0, 0, 0);
+	cairo_paint(cr);
+
+	cairo_translate(cr, 0, HEIGHT);
+	cairo_scale(cr, scale_x, -scale_y);
+
+	cairo_set_source_rgb(cr, 0.67, 0.67, 0.67);
+	cairo_move_to(cr, 0, 0);
+	for (size_t i = 0; i < num_pts; i++)
+		cairo_line_to(cr, i, elev[i]);
+	cairo_line_to(cr, num_pts, 0);
+	cairo_fill(cr);
+
+	cairo_identity_matrix(cr);
+
+	cairo_translate(cr, 0, HEIGHT);
+	cairo_scale(cr, 1, -1);
+
+	cairo_set_source_rgb(cr, 1, 0, 0);
+	cairo_move_to(cr, 0, scale_y * pos1);
+	cairo_line_to(cr, WIDTH - 1, scale_y * pos2);
+	cairo_stroke(cr);
+
+	cairo_set_source_rgb(cr, 1, 1, 1);
+	cairo_arc(cr, 0, scale_y * pos1, CIRCLE_R, 0, DEG2RAD(360));
+	cairo_fill(cr);
+
+	cairo_arc(cr, WIDTH - 1, scale_y * pos2, CIRCLE_R, 0, DEG2RAD(360));
+	cairo_fill(cr);
+
+	cairo_surface_write_to_png(surf, "navaid_profile.png");
+	cairo_destroy(cr);
+	cairo_surface_destroy(surf);
+}
+
+static void
 radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
     geo_pos3_t pos, fpp_t *fpp)
 {
@@ -815,6 +891,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	double water_fract = 0;
 	double elev_test[2] = {0, 0};
 	itm_pol_t pol;
+	double acf_hgt, nav_hgt;
 
 	ASSERT(!IS_NULL_VECT(v));
 
@@ -830,9 +907,9 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	 * "best case" test for them and discard them if there's no chance
 	 * that they'll be visible.
 	 */
-	error = itm_point_to_pointMDH(elev_test, 2, dist, nav->pos.elev + 10,
-	    pos.elev, ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG, ITM_NS_AVG,
-	    freq / 1000000.0, ITM_ENV_CONTINENTAL_TEMPERATE, pol,
+	error = itm_point_to_pointMDH(elev_test, 2, dist, pos.elev,
+	    nav->pos.elev + 10, ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG,
+	    ITM_NS_AVG, freq / 1000000.0, ITM_ENV_CONTINENTAL_TEMPERATE, pol,
 	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
 	if (error > ITM_RESULT_ERANGE_MULTI) {
 		if (rnav->signal_db_tgt == 0)
@@ -850,6 +927,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	probe.in_pts = calloc(probe.num_pts, sizeof (*probe.in_pts));
 	probe.out_elev = calloc(probe.num_pts, sizeof (*probe.out_elev));
 	probe.out_water = calloc(probe.num_pts, sizeof (*probe.out_water));
+	probe.filter_lin = B_TRUE;
 
 	for (unsigned i = 0; i < probe.num_pts; i++) {
 		vect2_t p = vect2_scmul(v, i / (double)(probe.num_pts - 1));
@@ -867,11 +945,33 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	dielec = wavg(ITM_DIELEC_GND_AVG, ITM_DIELEC_WATER_FRESH, water_fract);
 	conduct = wavg(ITM_CONDUCT_GND_AVG, water_conduct, water_fract);
 
+	/*
+	 * Some navaid DB entries are incorrect and list the navaid as
+	 * "below ground" (or elevation zero if unknown). Correct those
+	 * and clamp the height of the navaid to be at a minimum on the
+	 * ground (+10 meters for height).
+	 */
+	acf_hgt = MAX(pos.elev - probe.out_elev[0], 3);
+	nav_hgt = MAX(nav->pos.elev - probe.out_elev[probe.num_pts - 1], 10);
+
+#ifdef	DEBUG_NAVAID_PROFILE
+	if (strcmp(nav->id, DEBUG_NAVAID_PROFILE) == 0 &&
+	    nav->type == DEBUG_NAVAID_PROFILE_TYPE) {
+		debug_navaid_profile_dump(probe.out_elev, probe.num_pts,
+		    probe.out_elev[0] + acf_hgt,
+		    probe.out_elev[probe.num_pts - 1] + nav_hgt);
+	}
+#endif	/* DEBUG_NAVAID_PROFILE */
+
 	error = itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
-	    nav->pos.elev + 10, pos.elev, dielec, conduct, ITM_NS_AVG,
-	    (freq / 1000000.0), ITM_ENV_CONTINENTAL_TEMPERATE, pol,
-	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss,
-	    &propmode, NULL);
+	    acf_hgt, nav_hgt, dielec, conduct, ITM_NS_AVG, (freq / 1000000.0),
+	    ITM_ENV_CONTINENTAL_TEMPERATE, pol, ITM_ACCUR_MAX, ITM_ACCUR_MAX,
+	    ITM_ACCUR_MAX, &dbloss, &propmode, NULL);
+
+	free(probe.in_pts);
+	free(probe.out_elev);
+	free(probe.out_water);
+
 	if (error > ITM_RESULT_ERANGE_MULTI)
 		return;
 
