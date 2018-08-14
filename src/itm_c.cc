@@ -65,7 +65,7 @@ itm_point_to_pointMDH(double *elev, unsigned n_elev_pts, double distance,
 
 	e = (double *)calloc(n_elev_pts + 2, sizeof (*e));
 	e[0] = n_elev_pts - 1;
-	e[1] = distance / n_elev_pts;
+	e[1] = distance / (n_elev_pts - 1);
 	memcpy(&e[2], elev, n_elev_pts * sizeof (*e));
 
 	point_to_pointMDH(e, tht_m, rht_m, eps_dielect, sgm_conductivity,

@@ -907,17 +907,30 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	 * "best case" test for them and discard them if there's no chance
 	 * that they'll be visible.
 	 */
-	error = itm_point_to_pointMDH(elev_test, 2, dist, pos.elev,
-	    nav->pos.elev + 10, ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG,
+	error = itm_point_to_pointMDH(elev_test, 2, dist, MAX(pos.elev, 3),
+	    MAX(nav->pos.elev, 10), ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG,
 	    ITM_NS_AVG, freq / 1000000.0, ITM_ENV_CONTINENTAL_TEMPERATE, pol,
 	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
 	if (error > ITM_RESULT_ERANGE_MULTI) {
 		if (rnav->signal_db_tgt == 0)
 			rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
+#ifdef	DEBUG_NAVAID_PROFILE
+		if (strcmp(nav->id, DEBUG_NAVAID_PROFILE) == 0 &&
+		    nav->type == DEBUG_NAVAID_PROFILE_TYPE) {
+			printf("Navaid %s threw error\n", DEBUG_NAVAID_PROFILE);
+		}
+#endif	/* DEBUG_NAVAID_PROFILE */
 		return;
 	}
 	if (ANT_BASE_GAIN - dbloss < NOISE_FLOOR_TEST) {
 		rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
+#ifdef	DEBUG_NAVAID_PROFILE
+		if (strcmp(nav->id, DEBUG_NAVAID_PROFILE) == 0 &&
+		    nav->type == DEBUG_NAVAID_PROFILE_TYPE) {
+			printf("Navaid %s below our radio horizon\n",
+			    DEBUG_NAVAID_PROFILE);
+		}
+#endif	/* DEBUG_NAVAID_PROFILE */
 		return;
 	}
 
