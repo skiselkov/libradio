@@ -42,11 +42,11 @@
 #define	NAVAID_SRCH_RANGE	NM2MET(300)
 #define	ANT_BASE_GAIN		92.0	/* dB */
 #define	INTERFERENCE_LIMIT	16.0	/* dB */
-#define	NOISE_LEVEL_AUDIO	-50.0	/* dB */
-#define	NOISE_FLOOR_AUDIO	-75.0	/* dB */
-#define	NOISE_FLOOR_NAV_ID	-68.0	/* dB */
-#define	NOISE_FLOOR_SIGNAL	-65.0	/* dB */
-#define	NOISE_FLOOR_TEST	-80.0	/* dB */
+#define	NOISE_LEVEL_AUDIO	-55.0	/* dB */
+#define	NOISE_FLOOR_AUDIO	-80.0	/* dB */
+#define	NOISE_FLOOR_NAV_ID	-73.0	/* dB */
+#define	NOISE_FLOOR_SIGNAL	-70.0	/* dB */
+#define	NOISE_FLOOR_TEST	-85.0	/* dB */
 #define	NOISE_FLOOR_TOO_FAR	-100.0	/* dB */
 #define	HDEF_MAX		2.5	/* dots */
 #define	VDEF_MAX		2.5	/* dots */
@@ -870,6 +870,12 @@ debug_navaid_profile_dump(double *elev, size_t num_pts, double pos1,
 	cairo_surface_destroy(surf);
 }
 
+static double
+navaid_min_hgt(double dist)
+{
+	return (MAX(10, MET2NM(dist) / 2));
+}
+
 static void
 radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
     geo_pos3_t pos, fpp_t *fpp)
@@ -965,7 +971,8 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	 * ground (+10 meters for height).
 	 */
 	acf_hgt = MAX(pos.elev - probe.out_elev[0], 3);
-	nav_hgt = MAX(nav->pos.elev - probe.out_elev[probe.num_pts - 1], 10);
+	nav_hgt = MAX(nav->pos.elev - probe.out_elev[probe.num_pts - 1],
+	    navaid_min_hgt(dist));
 
 #ifdef	DEBUG_NAVAID_PROFILE
 	if (strcmp(nav->id, DEBUG_NAVAID_PROFILE) == 0 &&
