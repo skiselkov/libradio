@@ -18,6 +18,7 @@
 
 #include <time.h>
 
+#include <XPLMDisplay.h>
 #include <XPLMPlugin.h>
 #include <XPLMProcessing.h>
 #include <XPLMUtilities.h>
@@ -69,23 +70,13 @@
 #define	VOR_BUF_NUM_SAMPLES	4800
 #define	DME_BUF_NUM_SAMPLES	4788
 
-#define	GS_AVG_FREQ		332000000	/* Hz */
-
 #define	NAVRAD_LOCK_DELAY	3	/* seconds */
 
 #define	MAX_DR_VALS		8
 
-/*
- * Terrain profile debugging suport.
- * To enable dumping of the terrain profile passed to ITM into a file
- * called "navaid_profile.png" in X-Plane's root directory, define the
- * following two macros:
- *
- * #define	DEBUG_NAVAID_PROFILE		"<ID>"
- * #define	DEBUG_NAVAID_PROFILE_TYPE	NAVAID_<type>
- */
-
 static bool_t inited = B_FALSE;
+
+typedef struct radio_s radio_t;
 
 /*
  * Sources for these enum values:
@@ -119,6 +110,7 @@ typedef enum {
 } ap_state_t;
 
 typedef struct {
+	radio_t		*radio;
 	navaid_t	*navaid;
 	/*
 	 * `signal_db' is the dB level of the signal used by code that
@@ -152,7 +144,7 @@ typedef struct {
 	avl_node_t	node;
 } radio_navaid_t;
 
-typedef struct {
+struct radio_s {
 	unsigned	nr;
 
 	mutex_t		lock;
@@ -183,11 +175,11 @@ typedef struct {
 	struct {
 		char		id[8];
 		dr_t		id_dr;
-		char		type[8];
+		navaid_type_t	type;
 		dr_t		type_dr;
 		float		signal_db;
 		dr_t		signal_db_dr;
-		char		propmode[64];
+		int		propmode;
 		dr_t		propmode_dr;
 	} dr_vals[MAX_DR_VALS];
 
@@ -209,7 +201,7 @@ typedef struct {
 
 		dr_t	dme_nm;
 	} drs;
-} radio_t;
+};
 
 static struct {
 	navaiddb_t		*db;
@@ -232,6 +224,28 @@ static struct {
 
 	const egpws_intf_t	*opengpws;
 } navrad;
+
+static struct {
+	mutex_t			lock;
+
+	unsigned		nr;
+	dr_t			nr_dr;
+	char			id[8];
+	dr_t			id_dr;
+	navaid_type_t		type;
+	dr_t			type_dr;
+
+	mutex_t			render_lock;
+	double			*elev;
+	size_t			num_pts;
+	double			acf_alt;
+	double			nav_alt;
+	double			dist;
+	uint64_t		freq;
+
+	XPLMWindowID		win;
+	mt_cairo_render_t	*mtcr;
+} profile_debug;
 
 static struct {
 	dr_t		lat;
@@ -400,8 +414,6 @@ static double radio_get_bearing(radio_t *radio);
 static double radio_get_dme(radio_t *radio);
 static void radio_brg_update(radio_t *radio, double d_t);
 static void radio_dme_update(radio_t *radio, double d_t);
-static void debug_navaid_profile_dump(double *elev, size_t num_pts,
-    double pos1, double pos2) UNUSED_ATTR;
 
 static void
 comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp)
@@ -757,6 +769,7 @@ radio_refresh_navaid_list_type(radio_t *radio, avl_tree_t *tree,
 		rnav = avl_find(tree, &srch, &where);
 		if (rnav == NULL) {
 			rnav = calloc(1, sizeof (*rnav));
+			rnav->radio = radio;
 			rnav->navaid = list->navaids[i];
 			audio_buf_chunks_encode(rnav);
 			rnav->cur_audio_chunk =
@@ -809,65 +822,134 @@ radio_refresh_navaid_list(radio_t *radio, geo_pos2_t pos, uint64_t freq)
 	}
 }
 
-static void
-debug_navaid_profile_dump(double *elev, size_t num_pts, double pos1,
-    double pos2)
+static bool_t
+profile_debug_check(radio_navaid_t *rnav)
 {
-	static time_t last_dump = 0;
-	time_t now = time(NULL);
+	return (rnav->radio->nr == profile_debug.nr &&
+	    rnav->navaid->type == profile_debug.type &&
+	    strcmp(rnav->navaid->id, profile_debug.id) == 0);
+}
+
+static void
+profile_debug_draw_cb(cairo_t *cr, unsigned w, unsigned h, void *userinfo)
+{
+	double *elev;
+	size_t num_pts;
+	double acf_alt, nav_alt, dist, extra_alt;
 	double max_elev = 10;
-	cairo_t *cr;
-	cairo_surface_t *surf;
-	enum { WIDTH = 1920, HEIGHT = 500, CIRCLE_R = 10 };
+	enum { CIRCLE_R = 10, FRESNEL_STEPS = 50 };
 	double scale_x, scale_y;
+	double dash[2] = {10, 10};
+	uint64_t freq;
 
-	if (now - last_dump < 5)
+	UNUSED(userinfo);
+
+	cairo_identity_matrix(cr);
+
+	mutex_enter(&profile_debug.render_lock);
+
+	if (profile_debug.elev == NULL) {
+		mutex_exit(&profile_debug.render_lock);
+		cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+		cairo_paint(cr);
+		cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+		cairo_set_source_rgb(cr, 1, 0, 0);
+		cairo_move_to(cr, 0, 0);
+		cairo_line_to(cr, w, h);
+		cairo_move_to(cr, 0, h);
+		cairo_line_to(cr, w, 0);
+		cairo_stroke(cr);
 		return;
-	last_dump = now;
+	}
 
-	for (size_t i = 0; i < num_pts; i++)
-		max_elev = MAX(max_elev, elev[i]);
-	max_elev = MAX(max_elev, pos1 + 10);
-	max_elev = MAX(max_elev, pos2 + 10);
-	scale_x = WIDTH / (double)(num_pts - 1);
-	scale_y = HEIGHT / max_elev;
+	elev = malloc(profile_debug.num_pts * sizeof (*elev));
+	memcpy(elev, profile_debug.elev, profile_debug.num_pts *
+	    sizeof (*elev));
+	num_pts = profile_debug.num_pts;
+	acf_alt = profile_debug.acf_alt;
+	nav_alt = profile_debug.nav_alt;
+	dist = profile_debug.dist;
+	freq = profile_debug.freq;
+	ASSERT(dist != 0);
 
-	surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, WIDTH, HEIGHT);
-	cr = cairo_create(surf);
+	mutex_exit(&profile_debug.render_lock);
 
-	cairo_set_source_rgb(cr, 0, 0, 0);
+	extra_alt = EARTH_MSL * (1 - cos(M_PI * (dist / 40000000)));
+
+	for (size_t i = 0; i < num_pts; i++) {
+		double e = elev[i] + extra_alt *
+		    sin((i / (double)num_pts) * M_PI);
+		max_elev = MAX(max_elev, e);
+	}
+	max_elev = MAX(max_elev, acf_alt + 10);
+	max_elev = MAX(max_elev, nav_alt + 10);
+	scale_x = w / (double)(num_pts - 1);
+	scale_y = h / max_elev;
+
+	cairo_set_source_rgb(cr, 0.75, 0.75, 1);
 	cairo_paint(cr);
 
-	cairo_translate(cr, 0, HEIGHT);
+	cairo_translate(cr, 0, h);
 	cairo_scale(cr, scale_x, -scale_y);
 
-	cairo_set_source_rgb(cr, 0.67, 0.67, 0.67);
+	cairo_set_source_rgb(cr, 0.67, 0.4, 0);
 	cairo_move_to(cr, 0, 0);
-	for (size_t i = 0; i < num_pts; i++)
-		cairo_line_to(cr, i, elev[i]);
+	for (size_t i = 0; i < num_pts; i++) {
+		double e = elev[i] + extra_alt *
+		    sin((i / (double)num_pts) * M_PI);
+		cairo_line_to(cr, i, e);
+	}
 	cairo_line_to(cr, num_pts, 0);
 	cairo_fill(cr);
 
 	cairo_identity_matrix(cr);
 
-	cairo_translate(cr, 0, HEIGHT);
+	cairo_translate(cr, 0, h);
 	cairo_scale(cr, 1, -1);
 
+	cairo_set_source_rgb(cr, 0.45, 0.25, 0);
+	cairo_move_to(cr, 0, 0);
+	for (size_t i = 1; i <= 25; i++) {
+		cairo_line_to(cr, w * (i / 25.0), scale_y * extra_alt *
+		    sin((i / 25.0) * M_PI));
+	}
+	cairo_fill(cr);
+
+	/* draw the 1st Fresnel zone as a dashed curve */
+	cairo_set_source_rgb(cr, 0, 0, 0);
+	cairo_set_dash(cr, dash, 2, 0);
+
+	cairo_move_to(cr, 0, scale_y * acf_alt);
+	for (int i = 1; i <= FRESNEL_STEPS; i++) {
+		double f = i / (double)FRESNEL_STEPS;
+		double z = sqrt((3e8 / freq) * (f * dist) * ((1 - f) * dist) /
+		    dist);
+		cairo_line_to(cr, w * f,
+		    scale_y * (wavg(acf_alt, nav_alt, f) + z));
+	}
+	for (int i = FRESNEL_STEPS - 1; i >= 0; i--) {
+		double f = i / (double)FRESNEL_STEPS;
+		double z = sqrt((3e8 / freq) * (f * dist) * ((1 - f) * dist) /
+		    dist);
+		cairo_line_to(cr, w * f,
+		    scale_y * (wavg(acf_alt, nav_alt, f) - z));
+	}
+	cairo_stroke(cr);
+	cairo_set_dash(cr, NULL, 0, 0);
+
 	cairo_set_source_rgb(cr, 1, 0, 0);
-	cairo_move_to(cr, 0, scale_y * pos1);
-	cairo_line_to(cr, WIDTH - 1, scale_y * pos2);
+	cairo_move_to(cr, 0, scale_y * acf_alt);
+	cairo_line_to(cr, w - 1, scale_y * nav_alt);
 	cairo_stroke(cr);
 
 	cairo_set_source_rgb(cr, 1, 1, 1);
-	cairo_arc(cr, 0, scale_y * pos1, CIRCLE_R, 0, DEG2RAD(360));
+	cairo_arc(cr, 0, scale_y * acf_alt, CIRCLE_R, 0, DEG2RAD(360));
 	cairo_fill(cr);
 
-	cairo_arc(cr, WIDTH - 1, scale_y * pos2, CIRCLE_R, 0, DEG2RAD(360));
+	cairo_arc(cr, w - 1, scale_y * nav_alt, CIRCLE_R, 0, DEG2RAD(360));
 	cairo_fill(cr);
 
-	cairo_surface_write_to_png(surf, "navaid_profile.png");
-	cairo_destroy(cr);
-	cairo_surface_destroy(surf);
+	free(elev);
 }
 
 static double
@@ -920,23 +1002,27 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	if (error > ITM_RESULT_ERANGE_MULTI) {
 		if (rnav->signal_db_tgt == 0)
 			rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
-#ifdef	DEBUG_NAVAID_PROFILE
-		if (strcmp(nav->id, DEBUG_NAVAID_PROFILE) == 0 &&
-		    nav->type == DEBUG_NAVAID_PROFILE_TYPE) {
-			printf("Navaid %s threw error\n", DEBUG_NAVAID_PROFILE);
+		if (profile_debug_check(rnav)) {
+			printf("Navaid %s profile threw error: %d\n", nav->id,
+			    error);
+			if (profile_debug.elev != NULL) {
+				free(profile_debug.elev);
+				profile_debug.elev = NULL;
+			}
 		}
-#endif	/* DEBUG_NAVAID_PROFILE */
 		return;
 	}
 	if (ANT_BASE_GAIN - dbloss < NOISE_FLOOR_TEST) {
 		rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
-#ifdef	DEBUG_NAVAID_PROFILE
-		if (strcmp(nav->id, DEBUG_NAVAID_PROFILE) == 0 &&
-		    nav->type == DEBUG_NAVAID_PROFILE_TYPE) {
-			printf("Navaid %s below our radio horizon\n",
-			    DEBUG_NAVAID_PROFILE);
+		if (profile_debug_check(rnav)) {
+			printf("Navaid %s definitely out of range (flat "
+			    "terrain estimate: %.1f dB)\n", nav->id,
+			    ANT_BASE_GAIN - dbloss);
+			if (profile_debug.elev != NULL) {
+				free(profile_debug.elev);
+				profile_debug.elev = NULL;
+			}
 		}
-#endif	/* DEBUG_NAVAID_PROFILE */
 		return;
 	}
 
@@ -974,14 +1060,22 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	nav_hgt = MAX(nav->pos.elev - probe.out_elev[probe.num_pts - 1],
 	    navaid_min_hgt(dist));
 
-#ifdef	DEBUG_NAVAID_PROFILE
-	if (strcmp(nav->id, DEBUG_NAVAID_PROFILE) == 0 &&
-	    nav->type == DEBUG_NAVAID_PROFILE_TYPE) {
-		debug_navaid_profile_dump(probe.out_elev, probe.num_pts,
-		    probe.out_elev[0] + acf_hgt,
-		    probe.out_elev[probe.num_pts - 1] + nav_hgt);
+	if (profile_debug_check(rnav)) {
+		mutex_enter(&profile_debug.render_lock);
+		if (profile_debug.elev != NULL)
+			free(profile_debug.elev);
+		profile_debug.elev = malloc(probe.num_pts *
+		    sizeof (*profile_debug.elev));
+		memcpy(profile_debug.elev, probe.out_elev,
+		    probe.num_pts * sizeof (*profile_debug.elev));
+		profile_debug.num_pts = probe.num_pts;
+		profile_debug.acf_alt = probe.out_elev[0] + acf_hgt;
+		profile_debug.nav_alt = probe.out_elev[probe.num_pts - 1] +
+		    nav_hgt;
+		profile_debug.dist = dist;
+		profile_debug.freq = navaid_act_freq(nav->type, nav->freq);
+		mutex_exit(&profile_debug.render_lock);
 	}
-#endif	/* DEBUG_NAVAID_PROFILE */
 
 	error = itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
 	    acf_hgt, nav_hgt, dielec, conduct, ITM_NS_AVG, (freq / 1000000.0),
@@ -999,19 +1093,6 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	rnav->propmode = propmode;
 }
 
-/*
- * This is just a rough guesstimate of the xmit frequency portion of a DME
- * based on VOR frequency. It's not meant to be an accurate frequency table,
- * just something we can use to estimate signal propagation (so we only need
- * to get into the "ballpark").
- */
-static inline uint64_t
-vor2dme(uint64_t freq)
-{
-	double fract = (freq - 108000000.0) / (118000000.0 - 108000000.0);
-	return (1041000000 + 109000000 * fract);
-}
-
 static void
 radio_dr_slot_populate(radio_t *radio, radio_navaid_t *rnav, unsigned nr)
 {
@@ -1021,11 +1102,9 @@ radio_dr_slot_populate(radio_t *radio, radio_navaid_t *rnav, unsigned nr)
 	mutex_enter(&radio->lock);
 	strlcpy(radio->dr_vals[nr].id, rnav->navaid->id,
 	    sizeof (radio->dr_vals[nr].id));
-	strlcpy(radio->dr_vals[nr].type, navaid_type2str(rnav->navaid->type),
-	    sizeof (radio->dr_vals[nr].type));
+	radio->dr_vals[nr].type = rnav->navaid->type;
 	radio->dr_vals[nr].signal_db = rnav->signal_db;
-	strlcpy(radio->dr_vals[nr].propmode, itm_propmode2str(rnav->propmode),
-	    sizeof (radio->dr_vals[nr].propmode));
+	radio->dr_vals[nr].propmode = rnav->propmode;
 	mutex_exit(&radio->lock);
 }
 
@@ -1033,7 +1112,6 @@ static void
 radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 {
 	uint64_t freq;
-	uint64_t dme_freq;
 	unsigned dr_slot = 0;
 
 	mutex_enter(&radio->lock);
@@ -1042,35 +1120,90 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 
 	radio_refresh_navaid_list(radio, GEO3_TO_GEO2(pos), freq);
 
-	dme_freq = vor2dme(freq);
 	/*
 	 * Don't have to grab the lock here, since we're the only ones that
 	 * can modify the trees and we're not going to be doing so here.
 	 */
 	for (radio_navaid_t *rnav = avl_first(&radio->vlocs); rnav != NULL;
 	    rnav = AVL_NEXT(&radio->vlocs, rnav)) {
-		radio_navaid_recompute_signal(rnav, freq, pos, fpp);
+		radio_navaid_recompute_signal(rnav,
+		    navaid_act_freq(rnav->navaid->type, freq), pos, fpp);
 		radio_dr_slot_populate(radio, rnav, dr_slot++);
 	}
 	for (radio_navaid_t *rnav = avl_first(&radio->gses); rnav != NULL;
 	    rnav = AVL_NEXT(&radio->gses, rnav)) {
-		radio_navaid_recompute_signal(rnav, GS_AVG_FREQ, pos, fpp);
+		radio_navaid_recompute_signal(rnav,
+		    navaid_act_freq(rnav->navaid->type, freq), pos, fpp);
 		radio_dr_slot_populate(radio, rnav, dr_slot++);
 	}
 	for (radio_navaid_t *rnav = avl_first(&radio->dmes); rnav != NULL;
 	    rnav = AVL_NEXT(&radio->dmes, rnav)) {
-		radio_navaid_recompute_signal(rnav, dme_freq, pos, fpp);
+		radio_navaid_recompute_signal(rnav,
+		    navaid_act_freq(rnav->navaid->type, freq), pos, fpp);
 		radio_dr_slot_populate(radio, rnav, dr_slot++);
 	}
 
 	mutex_enter(&radio->lock);
 	for (; dr_slot < MAX_DR_VALS; dr_slot++) {
 		radio->dr_vals[dr_slot].id[0] = '\0';
-		radio->dr_vals[dr_slot].type[0] = '\0';
+		radio->dr_vals[dr_slot].type = 0;
 		radio->dr_vals[dr_slot].signal_db = 0;
-		radio->dr_vals[dr_slot].propmode[0] = '\0';
+		radio->dr_vals[dr_slot].propmode = 0;
 	}
 	mutex_exit(&radio->lock);
+}
+
+static void
+draw_debug_win_cb(XPLMWindowID win_id, void *refcon)
+{
+	int left, top, right, bottom, w, h;
+	UNUSED(refcon);
+
+	ASSERT(profile_debug.mtcr != NULL);
+
+	XPLMGetWindowGeometry(win_id, &left, &top, &right, &bottom);
+	w = right - left;
+	h = top - bottom;
+	mt_cairo_render_draw(profile_debug.mtcr, VECT2(left, bottom),
+	    VECT2(w, h));
+}
+
+static void
+profile_debug_floop(void)
+{
+	bool_t act;
+
+	if (profile_debug.win != NULL &&
+	    !XPLMGetWindowIsVisible(profile_debug.win))
+		profile_debug.id[0] = '\0';
+
+	act = (strlen(profile_debug.id) != 0);
+
+	if (act && profile_debug.win == NULL) {
+		XPLMCreateWindow_t cr = {
+		    .structSize = sizeof (cr),
+		    .visible = 1,
+		    .left = 10, .bottom = 10,
+		    .drawWindowFunc = draw_debug_win_cb,
+		    .layer = xplm_WindowLayerFloatingWindows,
+		    .decorateAsFloatingWindow = 1
+		};
+		int w, h;
+
+		XPLMGetScreenSize(&w, &h);
+		cr.right = w - 10;
+		cr.top = h / 3;
+		profile_debug.win = XPLMCreateWindowEx(&cr);
+		VERIFY(profile_debug.win != NULL);
+
+		profile_debug.mtcr = mt_cairo_render_init(w, h / 3, 1, NULL,
+		    profile_debug_draw_cb, NULL, NULL);
+	} else if (!act && profile_debug.win != NULL) {
+		XPLMDestroyWindow(profile_debug.win);
+		profile_debug.win = NULL;
+		mt_cairo_render_fini(profile_debug.mtcr);
+		profile_debug.mtcr = NULL;
+	}
 }
 
 static float
@@ -1097,6 +1230,8 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++)
 		radio_floop_cb(&navrad.radios[i], d_t);
+
+	profile_debug_floop();
 
 out:
 	navrad.last_t = navrad.cur_t;
@@ -1157,15 +1292,14 @@ radio_init(radio_t *radio, int nr)
 		dr_create_b(&radio->dr_vals[i].id_dr, radio->dr_vals[i].id,
 		    sizeof (radio->dr_vals[i].id), B_FALSE,
 		    "libradio/radio%d/navaid%d/id", nr, i);
-		dr_create_b(&radio->dr_vals[i].type_dr, radio->dr_vals[i].type,
-		    sizeof (radio->dr_vals[i].type), B_FALSE,
+		dr_create_i(&radio->dr_vals[i].type_dr,
+		    (int *)&radio->dr_vals[i].type, B_FALSE,
 		    "libradio/radio%d/navaid%d/type", nr, i);
 		dr_create_f(&radio->dr_vals[i].signal_db_dr,
 		    &radio->dr_vals[i].signal_db, B_FALSE,
 		    "libradio/radio%d/navaid%d/signal_db", nr, i);
-		dr_create_b(&radio->dr_vals[i].propmode_dr,
-		    radio->dr_vals[i].propmode,
-		    sizeof (radio->dr_vals[i].propmode), B_FALSE,
+		dr_create_i(&radio->dr_vals[i].propmode_dr,
+		    &radio->dr_vals[i].propmode, B_FALSE,
 		    "libradio/radio%d/navaid%d/propmode", nr, i);
 	}
 
@@ -1597,6 +1731,8 @@ navrad_init(navaiddb_t *db)
 	inited = B_TRUE;
 
 	memset(&navrad, 0, sizeof (navrad));
+	memset(&profile_debug, 0, sizeof (profile_debug));
+
 	navrad.db = db;
 	mutex_init(&navrad.lock);
 
@@ -1626,6 +1762,15 @@ navrad_init(navaiddb_t *db)
 
 	XPLMRegisterFlightLoopCallback(floop_cb, -1, NULL);
 
+	mutex_init(&profile_debug.lock);
+	mutex_init(&profile_debug.render_lock);
+	dr_create_i(&profile_debug.nr_dr, (int *)&profile_debug.nr, B_TRUE,
+	    "libradio/debug/radio");
+	dr_create_b(&profile_debug.id_dr, profile_debug.id,
+	    sizeof (profile_debug.id) - 1, B_TRUE, "libradio/debug/navaid");
+	dr_create_i(&profile_debug.type_dr, (int *)&profile_debug.type,
+	    B_TRUE, "libradio/debug/type");
+
 	opengpws = XPLMFindPluginBySignature(OPENGPWS_PLUGIN_SIG);
 	if (opengpws == XPLM_NO_PLUGIN_ID) {
 		logMsg("Cannot contact OpenGPWS for the terrain data. "
@@ -1651,7 +1796,22 @@ navrad_fini(void)
 		return;
 	inited = B_FALSE;
 
+	/*
+	 * Must go ahead profile_debug destruction to guarantee that
+	 * the navrad worker won't try to use destroyed locks.
+	 */
 	worker_fini(&navrad.worker);
+
+	if (profile_debug.win != NULL)
+		XPLMDestroyWindow(profile_debug.win);
+	if (profile_debug.mtcr != NULL)
+		mt_cairo_render_fini(profile_debug.mtcr);
+	free(profile_debug.elev);
+	dr_delete(&profile_debug.nr_dr);
+	dr_delete(&profile_debug.id_dr);
+	dr_delete(&profile_debug.type_dr);
+	mutex_destroy(&profile_debug.render_lock);
+	mutex_destroy(&profile_debug.lock);
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++)
 		radio_fini(&navrad.radios[i]);

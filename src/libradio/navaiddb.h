@@ -144,6 +144,7 @@ navaid_list_t *navaiddb_query(navaiddb_t *db, geo_pos2_t center,
 void navaiddb_list_free(navaid_list_t *list);
 
 const char *navaid_type2str(navaid_type_t type);
+uint64_t navaid_act_freq(navaid_type_t type, uint64_t ref_freq);
 
 #ifdef	__cplusplus
 }

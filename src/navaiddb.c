@@ -654,3 +654,29 @@ navaid_type2str(navaid_type_t type)
 		VERIFY_MSG(0, "Invalid navaid type passed: %x\n", type);
 	}
 }
+
+/*
+ * This is just a rough guesstimate of the xmit frequency portion of a DME
+ * based on VOR frequency. It's not meant to be an accurate frequency table,
+ * just something we can use to estimate signal propagation (so we only need
+ * to get into the "ballpark").
+ */
+static inline uint64_t
+vor2dme(uint64_t freq)
+{
+	double fract = (freq - 108000000.0) / (118000000.0 - 108000000.0);
+	return (1041000000 + 109000000 * fract);
+}
+
+uint64_t
+navaid_act_freq(navaid_type_t type, uint64_t ref_freq)
+{
+	switch (type) {
+	case NAVAID_GS:
+		return (332000000);
+	case NAVAID_DME:
+		return (vor2dme(ref_freq));
+	default:
+		return (ref_freq);
+	}
+}
