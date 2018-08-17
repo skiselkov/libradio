@@ -1,0 +1,733 @@
+/*
+ * CDDL HEADER START
+ *
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
+*/
+/*
+ * Copyright 2018 Saso Kiselkov. All rights reserved.
+ */
+
+#include <errno.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <string.h>
+
+#include <jni.h>
+
+#include <shapefil.h>
+
+#include <acfutils/geom.h>
+#include <acfutils/helpers.h>
+#include <acfutils/math.h>
+#include <acfutils/mt_cairo_render.h>
+#include <acfutils/perf.h>
+#include <acfutils/png.h>
+#include <acfutils/time.h>
+
+#include "itm_c.h"
+#include "RadioModel.h"
+
+#define	NUM_LAT	18
+#define	NUM_LON	36
+
+/*
+ * The X-Plane elevation data is stored in the alpha channel of the earth
+ * orbit texture normal maps. The values range from 255 corresponding to
+ * 418 meters BELOW sea level (lowest elevation on Earth) up to 0
+ * corresponding to 8848 meters above sea level (highest elevation on Earth).
+ * Yes, the range is inverted (for some reason). This range corresponds to
+ * approximately 36.337 meters per elevation sample.
+ */
+#define	ELEV_SAMPLE2MET(sample)	((int)round(((255 - (sample)) * 36.337) - 418))
+
+#define	LAT2TILE(lat)	(floor(((lat) + 90.0) / 10.0))
+#define	LON2TILE(lon)	(floor(((lon) + 180.0) / 10.0))
+
+#define	WATER_MASK_RES		2000	/* pixels */
+
+typedef struct {
+	unsigned	w;
+	unsigned	h;
+
+	int16_t		*points;
+
+	cairo_surface_t	*water_surf;
+	const uint8_t	*water_mask;
+	int		water_mask_stride;
+} tile_t;
+
+static struct {
+	bool_t	inited;
+	tile_t	tiles[NUM_LAT][NUM_LON];
+} rm = { B_FALSE };
+
+static void
+throw(JNIEnv *env, const char *classname, const char *fmt, ...)
+{
+	jclass cls;
+	char *msgbuf;
+	int l;
+	va_list ap;
+
+	cls = (*env)->FindClass(env, classname);
+	VERIFY(cls != NULL);
+
+	va_start(ap, fmt);
+	l = vsnprintf(NULL, 0, fmt, ap);
+	va_end(ap);
+
+	msgbuf = malloc(l + 1);
+
+	va_start(ap, fmt);
+	VERIFY3S(vsnprintf(msgbuf, l + 1, fmt, ap), ==, l);
+	va_end(ap);
+
+	(*env)->ThrowNew(env, cls, msgbuf);
+
+	free(msgbuf);
+}
+
+static void
+load_water_mask_file(const char *filename, cairo_t *cr, int lat, int lon)
+{
+	SHPHandle shp;
+	int n_ent, shp_type;
+	double lat_off = (lat / 10.0) - floor(lat / 10.0);
+	double lon_off = (lon / 10.0) - floor(lon / 10.0);
+
+	shp = SHPOpen(filename, "rb");
+	if (shp == NULL)
+		return;
+	SHPGetInfo(shp, &n_ent, &shp_type, NULL, NULL);
+	/* We only support polygons, given that that's what X-Plane uses. */
+	if (shp_type != SHPT_POLYGON) {
+		SHPClose(shp);
+		return;
+	}
+
+	cairo_save(cr);
+	cairo_translate(cr, 0, WATER_MASK_RES);
+	cairo_scale(cr, 1, -1);
+	cairo_translate(cr, round(lon_off * WATER_MASK_RES),
+	    round(lat_off * WATER_MASK_RES));
+	cairo_scale(cr, round(WATER_MASK_RES / 10),
+	    round(WATER_MASK_RES / 10));
+
+	/*
+	 * Clear all data to mark the tile as being all terrain. The water
+	 * mask will apply terrain where necessary.
+	 */
+	cairo_rectangle(cr, 0, 0, 1, 1);
+	cairo_clip(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+	for (int i = 0; i < n_ent; i++) {
+		SHPObject *obj = SHPReadObject(shp, i);
+
+		if (obj == NULL)
+			continue;
+
+		cairo_new_path(cr);
+		for (int j = 0; j < obj->nParts; j++) {
+			int start_k, end_k;
+
+			start_k = obj->panPartStart[j];
+			if (j + 1 < obj->nParts)
+				end_k = obj->panPartStart[j + 1];
+			else
+				end_k = obj->nVertices;
+
+			cairo_new_sub_path(cr);
+			/*
+			 * Note that the rendered image will be "upside down"
+			 * when viewed as a PNG. That's because cairo & PNG
+			 * address the image from the top left, but our terrain
+			 * coordinates start at the bottom left. So we flip the
+			 * Y axis, so that increasing row numbers will
+			 * correspond to increasing latitude.
+			 */
+			cairo_move_to(cr, obj->padfX[start_k] - lon,
+			    obj->padfY[start_k] - lat);
+			for (int k = start_k + 1; k < end_k; k++) {
+				cairo_line_to(cr, obj->padfX[k] - lon,
+				    obj->padfY[k] - lat);
+			}
+		}
+		cairo_fill(cr);
+		SHPDestroyObject(obj);
+	}
+
+	cairo_restore(cr);
+
+	SHPClose(shp);
+}
+
+static bool_t
+file_ext(const char *filename, const char *ext)
+{
+	const char *period = strrchr(filename, '.');
+	return (period != NULL && strcmp(&period[1], ext) == 0);
+}
+
+static void
+load_water_mask(tile_t *tile, const char *tile_path, unsigned tile_lat,
+    unsigned tile_lon)
+{
+	char dname[64];
+	char *path;
+	DIR *dp;
+	struct dirent *de;
+	cairo_t *cr;
+
+	snprintf(dname, sizeof (dname), "%+03d%+04d", tile_lat, tile_lon);
+	path = mkpathname(tile_path, dname, NULL);
+
+	dp = opendir(path);
+	if (dp == NULL)
+		goto out;
+
+	ASSERT3P(tile->water_surf, ==, NULL);
+	tile->water_surf = cairo_image_surface_create(CAIRO_FORMAT_A1,
+	    WATER_MASK_RES, WATER_MASK_RES);
+	tile->water_mask = cairo_image_surface_get_data(tile->water_surf);
+	tile->water_mask_stride =
+	    cairo_image_surface_get_stride(tile->water_surf);
+
+	cr = cairo_create(tile->water_surf);
+	/*
+	 * Pre-fill everything with water, the tile will then apply terrain
+	 * where necessary.
+	 */
+	cairo_set_source_rgb(cr, 1, 1, 1);
+	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	cairo_set_source_rgb(cr, 1, 1, 1);
+
+	while ((de = readdir(dp)) != NULL) {
+		int subtile_lat, subtile_lon;
+		char *filename;
+
+		if (sscanf(de->d_name, "%d%d", &subtile_lat,
+		    &subtile_lon) != 2 || !file_ext(de->d_name, "shp") ||
+		    !is_valid_lat(subtile_lat) || !is_valid_lon(subtile_lon))
+			continue;
+		filename = mkpathname(tile_path, dname, de->d_name, NULL);
+		load_water_mask_file(filename, cr, subtile_lat, subtile_lon);
+		lacf_free(filename);
+	}
+	closedir(dp);
+	cairo_surface_flush(tile->water_surf);
+	cairo_destroy(cr);
+out:
+	lacf_free(path);
+}
+
+JNIEXPORT void JNICALL
+Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str)
+{
+	const char *tile_path = NULL;
+	DIR *dp = NULL;
+	struct dirent *de;
+
+	UNUSED(cls);
+
+	log_init((logfunc_t)puts, "libradio");
+
+	if (rm.inited) {
+		throw(env, "java/lang/ExceptionInInitializerError",
+		    "RadioModel.init() called twice without "
+		    "calling RadioModel.fini() in between");
+		return;
+	}
+
+	memset(&rm, 0, sizeof (rm));
+	rm.inited = B_TRUE;
+
+	tile_path = (*env)->GetStringUTFChars(env, tile_path_str, NULL);
+
+	dp = opendir(tile_path);
+	if (dp == NULL) {
+		throw(env, "java/lang/FileSystemNotFoundException",
+		    "Can't open directory %s: %s", tile_path, strerror(errno));
+		goto out;
+	}
+	while ((de = readdir(dp)) != NULL) {
+		int tile_lat, tile_lon;
+		int tile_lat_norm, tile_lon_norm;
+		tile_t *tile;
+		int w, h;
+		uint8_t *pixels;
+		char *path;
+
+		if (sscanf(de->d_name, "%d%d", &tile_lat, &tile_lon) != 2 ||
+		    strlen(de->d_name) != 15 || !file_ext(de->d_name, "png") ||
+		    !is_valid_lat(tile_lat) || !is_valid_lon(tile_lon))
+			continue;
+
+		tile_lat_norm = floor(tile_lat / 10.0) + 9;
+		tile_lon_norm = floor(tile_lon / 10.0) + 18;
+		ASSERT3S(tile_lat_norm, >=, 0);
+		ASSERT3S(tile_lat_norm, <, NUM_LAT);
+		ASSERT3S(tile_lon_norm, >=, 0);
+		ASSERT3S(tile_lon_norm, <, NUM_LON);
+
+		tile = &(rm.tiles[tile_lat_norm][tile_lon_norm]);
+		if (tile->points != NULL) {
+			throw(env, "java/lang/ExceptionInInitializerError",
+			    "Duplicate tile %s in tile path %s", de->d_name,
+			    tile_path);
+			goto out;
+		}
+
+		path = mkpathname(tile_path, de->d_name, NULL);
+		pixels = png_load_from_file_rgba(path, &w, &h);
+		if (pixels == NULL) {
+			throw(env, "java/lang/ExceptionInInitializerError",
+			    "Error reading PNG data from file %s", path);
+			lacf_free(path);
+			goto out;
+		}
+		lacf_free(path);
+		ASSERT3S(w, >, 0);
+		ASSERT3S(h, >, 0);
+
+		tile->w = w;
+		tile->h = h;
+		tile->points =
+		    malloc(tile->w * tile->h * sizeof (*tile->points));
+		/*
+		 * Copy over and keep only the alpha channel, since that's
+		 * where our elevation data is. We'll pre-chew the samples
+		 * to be whole meters, to make subsequent lookups faster.
+		 */
+		for (int i = 0; i < w * h; i++)
+			tile->points[i] = ELEV_SAMPLE2MET(pixels[i * 4 + 3]);
+
+		lacf_free(pixels);
+
+		load_water_mask(tile, tile_path, tile_lat, tile_lon);
+#ifdef	WATER_MASK_DEBUG
+		if (tile->water_surf != NULL) {
+			char *path = mkpathname("water", de->d_name, NULL);
+			cairo_surface_write_to_png(tile->water_surf, path);
+			lacf_free(path);
+		}
+#endif	/* WATER_MASK_DEBUG */
+	}
+
+out:
+	if (dp != NULL)
+		closedir(dp);
+	(*env)->ReleaseStringUTFChars(env, tile_path_str, tile_path);
+}
+
+JNIEXPORT void JNICALL
+Java_RadioModel_fini(JNIEnv *env, jclass cls)
+{
+	UNUSED(env);
+	UNUSED(cls);
+
+	if (!rm.inited)
+		return;
+
+	for (int lat = 0; lat < NUM_LAT; lat++) {
+		for (int lon = 0; lon < NUM_LON; lon++) {
+			tile_t *tile = &rm.tiles[lat][lon];
+			free(tile->points);
+			if (tile->water_surf != NULL)
+				cairo_surface_destroy(tile->water_surf);
+		}
+	}
+
+	memset(&rm, 0, sizeof (rm));
+}
+
+JNIEXPORT jint JNICALL
+Java_RadioModel_countBytes(JNIEnv *env, jclass cls)
+{
+	int bytes = 0;
+
+	UNUSED(env);
+	UNUSED(cls);
+
+	for (int lat = 0; lat < NUM_LAT; lat++) {
+		for (int lon = 0; lon < NUM_LON; lon++) {
+			tile_t *tile = &rm.tiles[lat][lon];
+
+			bytes += sizeof (*tile->points) * tile->w * tile->h;
+			bytes += tile->water_mask_stride * WATER_MASK_RES;
+		}
+	}
+
+	return (bytes);
+}
+
+static inline double
+elev_filter_lin(tile_t *tile, double fract_lat, double fract_lon)
+{
+	double x_f = clamp(fract_lon * tile->w, 0, tile->w - 1);
+	/*
+	 * In-tile the rows are stored from higher latitudes to lower.
+	 */
+	double y_f = clamp((1 - fract_lat) * (tile->h - 1), 0, tile->h - 1);
+	unsigned x_lo = x_f, x_hi = MIN(x_lo + 1, tile->w - 1);
+	unsigned y_lo = y_f, y_hi = MIN(y_lo + 1, tile->h - 1);
+	double elev1, elev2, elev3, elev4;
+
+	elev1 = tile->points[y_lo * tile->w + x_lo];
+	elev2 = tile->points[y_lo * tile->w + x_hi];
+	elev3 = tile->points[y_hi * tile->w + x_lo];
+	elev4 = tile->points[y_hi * tile->w + x_hi];
+
+	return (wavg(wavg(elev1, elev2, x_f - x_lo),
+	    wavg(elev3, elev4, x_f - x_lo), y_f - y_lo));
+}
+
+static inline bool_t
+tile_water_mask_read(tile_t *tile, double fract_lat, double fract_lon)
+{
+	unsigned x = clampi(round(fract_lon * (WATER_MASK_RES - 1)), 0,
+	    WATER_MASK_RES - 1);
+	unsigned y = clampi(round((1 - fract_lat) * (WATER_MASK_RES - 1)), 0,
+	    WATER_MASK_RES - 1);
+	uint32_t *row;
+	unsigned row_slot, bit_slot;
+
+	if (tile->water_mask == NULL)
+		return (B_FALSE);
+
+	row = (uint32_t *)(&tile->water_mask[y * tile->water_mask_stride]);
+	row_slot = x / 32;
+	bit_slot = x & 0x1f;
+
+	return ((row[row_slot] >> bit_slot) & 1);
+}
+
+static inline double
+tile_elev_read(geo_pos2_t p, bool_t *water)
+{
+	unsigned tile_lat = floor(p.lat / 10.0);
+	unsigned tile_lon = floor(p.lon / 10.0);
+	double tile_lat_fract = ((p.lat / 10) - tile_lat);
+	double tile_lon_fract = ((p.lon / 10) - tile_lon);
+	tile_t *tile;
+
+	ASSERT3U(tile_lat, <, NUM_LAT);
+	ASSERT3U(tile_lon, <, NUM_LON);
+	tile = &rm.tiles[tile_lat][tile_lon];
+	if (tile->points == NULL)
+		return (0);
+
+	ASSERT3F(tile_lat_fract, >=, 0.0);
+	ASSERT3F(tile_lat_fract, <=, 1.0);
+	ASSERT3F(tile_lon_fract, >=, 0.0);
+	ASSERT3F(tile_lon_fract, <=, 1.0);
+
+	*water = tile_water_mask_read(tile, tile_lat_fract, tile_lon_fract);
+
+	return (elev_filter_lin(tile, tile_lat_fract, tile_lon_fract));
+}
+
+static void
+relief_construct(geo_pos2_t p1, geo_pos2_t p2, double *elev, bool_t *water,
+    size_t num_pts)
+{
+	double d_lat = p2.lat - p1.lat;
+	double d_lon = p2.lon - p1.lon;
+
+	for (size_t i = 0; i < num_pts; i++) {
+		double f = i / (double)(num_pts - 1);
+		/*
+		 * normalize_hdg here is used to make sure we handle
+		 * longitude wrapping correctly.
+		 */
+		elev[i] = tile_elev_read(GEO_POS2(p1.lat + 90 + f * d_lat,
+		    normalize_hdg(p1.lon + 180 + f * d_lon)), &water[i]);
+	}
+}
+
+static bool_t
+validate_freq(JNIEnv *env, double freq_mhz)
+{
+	if (freq_mhz < 20 || freq_mhz > 20000) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Invalid frequency passed (%f), must a number between "
+		    "20 and 20000 (RadioModel is only applicable from "
+		    "20 MHz to 20 GHz)", freq_mhz);
+		return (B_FALSE);
+	}
+	return (B_TRUE);
+}
+
+#ifdef	RELIEF_DEBUG
+
+static void
+relief_debug(double acf_elev, double twr_elev, double *elev, size_t num_pts)
+{
+	enum { MULT = 5, HEIGHT = 350 };
+	cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+	    MULT * num_pts, HEIGHT);
+	cairo_t *cr = cairo_create(surf);
+	double max_elev = MAX(acf_elev, twr_elev);
+
+	for (size_t i = 0; i < num_pts; i++)
+		max_elev = MAX(max_elev, elev[i]);
+
+	cairo_set_source_rgb(cr, 0, 0, 0);
+	cairo_paint(cr);
+
+	cairo_translate(cr, 0, HEIGHT);
+	cairo_scale(cr, 1, -1);
+	cairo_set_source_rgb(cr, 1, 1, 1);
+	cairo_move_to(cr, 0, 0);
+	for (size_t i = 0; i < num_pts; i++)
+		cairo_line_to(cr, MULT * i, (elev[i] / max_elev) * HEIGHT);
+	cairo_line_to(cr, MULT * num_pts, 0);
+	cairo_fill(cr);
+
+	cairo_surface_write_to_png(surf, "relief.png");
+
+	cairo_destroy(cr);
+	cairo_surface_destroy(surf);
+}
+
+#endif	/* RELIEF_DEBUG */
+
+static double
+p2p_impl(double freq_mhz, double xmit_gain, double recv_min_gain,
+    geo_pos3_t acf_pos, geo_pos3_t twr_pos, double *terr_elev, bool_t *water_p)
+{
+	enum {
+	    MAX_PTS = 400,
+	    SPACING = 1000,	/* meters */
+	    MIN_DIST = 1000,	/* meters */
+	    MAX_DIST = 600000,	/* meters */
+	    MIN_ACF_HGT = 6,	/* meters */
+	    MIN_TWR_HGT = 20	/* meters */
+	};
+	vect3_t v1 = geo2ecef_mtr(acf_pos, &wgs84);
+	vect3_t v2 = geo2ecef_mtr(twr_pos, &wgs84);
+	double dist = clamp(vect3_abs(vect3_sub(v1, v2)), MIN_DIST, MAX_DIST);
+	int error;
+	double acf_hgt, twr_hgt, dbloss;
+	size_t num_pts;
+	double *elev = NULL;
+	bool_t *water = NULL;
+
+	/*
+	 * Stations are too far apart, no chance of them seeing each other.
+	 */
+	if (dist >= MAX_DIST)
+		goto errout;
+
+	num_pts = clampi(dist / SPACING, 2, MAX_PTS);
+	elev = malloc(num_pts * sizeof (*elev));
+	water = malloc(num_pts * sizeof (*water));
+	relief_construct(GEO3_TO_GEO2(acf_pos), GEO3_TO_GEO2(twr_pos),
+	    elev, water, num_pts);
+
+	acf_hgt = MAX(acf_pos.elev - elev[0], MIN_ACF_HGT);
+	twr_hgt = MAX(twr_pos.elev - elev[num_pts - 1], MIN_TWR_HGT);
+
+	error = itm_point_to_pointMDH(elev, num_pts, dist,
+	    acf_hgt, twr_hgt, ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG,
+	    ITM_NS_AVG, freq_mhz, ITM_ENV_CONTINENTAL_TEMPERATE, ITM_POL_HORIZ,
+	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
+	if (error > ITM_RESULT_ERANGE_MULTI)
+		goto errout;
+
+	if (terr_elev != NULL) {
+		*terr_elev = elev[0];
+		*water_p = water[0];
+	}
+
+#ifdef	RELIEF_DEBUG
+	relief_debug(acf_pos.elev, twr_pos.elev, elev, num_pts);
+#endif
+	free(elev);
+	free(water);
+
+	return (MAX(xmit_gain - dbloss, recv_min_gain));
+errout:
+	if (terr_elev != NULL) {
+		ASSERT(water_p != NULL);
+		geo_pos2_t tile_pos = GEO_POS2(acf_pos.lat + 90,
+		    acf_pos.lon + 180);
+		*terr_elev = tile_elev_read(tile_pos, water_p);
+	}
+	free(elev);
+	free(water);
+	return (recv_min_gain);
+}
+
+JNIEXPORT jdouble JNICALL
+Java_RadioModel_pointToPoint(JNIEnv *env, jclass cls, jdouble freq_mhz,
+    jdouble xmit_gain, jdouble recv_min_gain,
+    jdouble acf_lat, jdouble acf_lon, jdouble acf_elev,
+    jdouble twr_lat, jdouble twr_lon, jdouble twr_elev)
+{
+	UNUSED(cls);
+
+	if (!rm.inited) {
+		throw(env, "java/lang/ExceptionInInitializerError",
+		    "RadioModel not initialized. You must call "
+		    "RadioModel.init() first");
+		return (0);
+	}
+	if (!validate_freq(env, freq_mhz))
+		return (0);
+	if (!is_valid_lat(acf_lat) || !is_valid_lon(acf_lon) ||
+	    !is_valid_elev(acf_elev) || !is_valid_lat(twr_lat) ||
+	    !is_valid_lon(twr_lon) || !is_valid_elev(twr_elev)) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Invalid aircraft or tower lat x lon x elevation passed "
+		    "(coordinates must be in degrees x degrees x meters AMSL)");
+		return (0);
+	}
+
+	return (p2p_impl(freq_mhz, xmit_gain, recv_min_gain,
+	    GEO_POS3(acf_lat, acf_lon, acf_elev),
+	    GEO_POS3(twr_lat, twr_lon, twr_elev), NULL, NULL));
+}
+
+static inline uint32_t
+get_terr_color(double elev)
+{
+	enum { NUM_TERR_COLORS = 22 };
+	const uint32_t terr_colors[NUM_TERR_COLORS] = {
+	    BE32(0x217f87ffu),	/* -1000 - 0 */
+	    BE32(0x3da58cffu),	/* 0 - 1000 */
+	    BE32(0x5fa485ffu),	/* 1000 - 2000 */
+	    BE32(0x87993dffu),	/* 2000 - 3000 */
+	    BE32(0xf1cf5affu),	/* 3000 - 4000 */
+	    BE32(0xf1cf5affu),	/* 4000 - 5000 */
+	    BE32(0xf6b358ffu),	/* 5000 - 6000 */
+	    BE32(0xf6b358ffu),	/* 6000 - 7000 */
+	    BE32(0xd18b44ffu),	/* 7000 - 8000 */
+	    BE32(0xd18b44ffu),	/* 8000 - 9000 */
+	    BE32(0xb96f33ffu),	/* 9000 - 10000 */
+	    BE32(0xb96f33ffu),	/* 10000 - 11000 */
+	    BE32(0xb96f33ffu),	/* 11000 - 12000 */
+	    BE32(0xb45b29ffu),	/* 12000 - 13000 */
+	    BE32(0xb45b29ffu),	/* 13000 - 14000 */
+	    BE32(0xb45b29ffu),	/* 14000 - 15000 */
+	    BE32(0xb45b29ffu),	/* 15000 - 16000 */
+	    BE32(0xb45b29ffu),	/* 16000 - 17000 */
+	    BE32(0xb45b29ffu),	/* 17000 - 18000 */
+	    BE32(0xb45b29ffu),	/* 18000 - 19000 */
+	    BE32(0xb45b29ffu),	/* 19000 - 20000 */
+	    BE32(0x9c4c26ffu)	/* rest */
+	};
+	int idx = clampi((MET2FEET(elev) + 500) / 1000, 0, NUM_TERR_COLORS - 1);
+	return (terr_colors[idx]);
+}
+
+JNIEXPORT void JNICALL
+Java_RadioModel_paintMap(JNIEnv *env, jclass cls, jdouble freq_mhz,
+    jdouble xmit_gain, jdouble recv_min_gain, jdouble acf_elev,
+    jdouble twr_lat, jdouble twr_lon, jdouble twr_elev,
+    jdouble deg_range, jint pixel_size, jstring out_file_str)
+{
+	uint8_t *pixels;
+	const char *out_file;
+	size_t samples = 0;
+	uint64_t start, end;
+
+	UNUSED(cls);
+
+	if (!validate_freq(env, freq_mhz))
+		return;
+	if (!is_valid_elev(acf_elev) || !is_valid_lat(twr_lat) ||
+	    !is_valid_lon(twr_lon) || !is_valid_elev(twr_elev)) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Invalid aircraft or tower lat x lon x elevation passed "
+		    "(%f, %f, %f, %f). Coordinates must be in degrees x "
+		    "degrees x meters AMSL.", acf_elev, twr_lat, twr_lon,
+		    twr_elev);
+		return;
+	}
+	if (deg_range <= 0 || deg_range >= 90) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Invalid display range in degrees (%f). Must be a positive "
+		    "number greater than 0 and less than 90", deg_range);
+		return;
+	}
+	if (pixel_size <= 2 || pixel_size > 8192) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Invalid pixel size specified (%d). Must be a positive "
+		    "integer not greater than 8192", pixel_size);
+		return;
+	}
+
+	out_file = (*env)->GetStringUTFChars(env, out_file_str, NULL);
+	pixels = malloc(4 * pixel_size * pixel_size);
+
+	start = microclock();
+
+	for (int y = 0; y < pixel_size; y++) {
+		for (int x = 0; x < pixel_size; x++) {
+			double lon = twr_lon +
+			    ((x / (double)pixel_size) - 0.5) * deg_range;
+			double lat = twr_lat -
+			    ((y / (double)pixel_size) - 0.5) * deg_range;
+			double elev;
+			bool_t water;
+			double signal_db = p2p_impl(freq_mhz, xmit_gain,
+			    recv_min_gain, GEO_POS3(lat, lon, acf_elev),
+			    GEO_POS3(twr_lat, twr_lon, twr_elev), &elev,
+			    &water);
+			UNUSED(signal_db);
+			double signal_rel =
+			    1 - clamp(signal_db / recv_min_gain, 0, 1);
+			uint32_t terr_color = get_terr_color(elev);
+			uint32_t pixel, rem;
+			uint8_t r, g, b, rem_r, rem_g, rem_b;
+
+			if (water)
+				terr_color = 0xffff8f47u;
+			r = (terr_color & 0xff0000) >> 16;
+			g = (terr_color & 0xff00) >> 8;
+			b = (terr_color & 0xff);
+			rem = 0xffffffffu - terr_color;
+			rem_r = (rem & 0xff0000) >> 16;
+			rem_g = (rem & 0xff00) >> 8;
+			rem_b = (rem & 0xff);
+
+			signal_rel = round(signal_rel * 20) / 20;
+			pixel = 0xff000000u |
+			    (r + (uint32_t)(rem_r * signal_rel)) << 16 |
+			    (g + (uint32_t)(rem_g * signal_rel)) << 8 |
+			    (b + (uint32_t)(rem_b * signal_rel));
+
+			*(uint32_t *)(&pixels[4 * (y * pixel_size + x)]) =
+			    pixel;
+		}
+	}
+
+	end = microclock();
+	if (samples % 100000 == 0) {
+		printf("took %.3fs @ %llu samples / sec\n",
+		    USEC2SEC(end - start),
+		    (unsigned long long)((pixel_size * pixel_size) /
+		    USEC2SEC(end - start)));
+	}
+
+	if (!png_write_to_file_rgba(out_file, pixel_size, pixel_size, pixels)) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Error writing png file %s", out_file);
+	}
+
+	free(pixels);
+	(*env)->ReleaseStringUTFChars(env, out_file_str, out_file);
+}
