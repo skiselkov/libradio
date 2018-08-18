@@ -54,6 +54,8 @@
 
 #define	WATER_MASK_RES		2000	/* pixels */
 
+/* #define	RELIEF_DEBUG */
+
 typedef struct {
 	unsigned	w;
 	unsigned	h;
@@ -66,7 +68,9 @@ typedef struct {
 } tile_t;
 
 static struct {
-	bool_t	inited;
+	bool_t		inited;
+	unsigned	spacing;
+	unsigned	max_pts;
 	tile_t	tiles[NUM_LAT][NUM_LON];
 } rm = { B_FALSE };
 
@@ -94,6 +98,18 @@ throw(JNIEnv *env, const char *classname, const char *fmt, ...)
 	(*env)->ThrowNew(env, cls, msgbuf);
 
 	free(msgbuf);
+}
+
+static bool_t
+init_test(JNIEnv *env)
+{
+	if (!rm.inited) {
+		throw(env, "java/lang/ExceptionInInitializerError",
+		    "RadioModel not initialized. You must call "
+		    "RadioModel.init() first");
+		return (B_FALSE);
+	}
+	return (B_TRUE);
 }
 
 static void
@@ -234,15 +250,16 @@ out:
 }
 
 JNIEXPORT void JNICALL
-Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str)
+Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str,
+    jint spacing, jint max_pts)
 {
+	enum { MIN_SPACING = 10, MAX_SPACING = 100000, DFL_SPACING = 500,
+	    DFL_MAX_PTS = 500 };
 	const char *tile_path = NULL;
 	DIR *dp = NULL;
 	struct dirent *de;
 
 	UNUSED(cls);
-
-	log_init((logfunc_t)puts, "libradio");
 
 	if (rm.inited) {
 		throw(env, "java/lang/ExceptionInInitializerError",
@@ -251,8 +268,31 @@ Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str)
 		return;
 	}
 
+	log_init((logfunc_t)puts, "libradio");
+
+	if (spacing == 0)
+		spacing = DFL_SPACING;
+	if (spacing < MIN_SPACING || spacing > MAX_SPACING) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Passed invalid `spacing' value (%d), must be an integer "
+		    "between %d and %d (or 0 if you want the default value "
+		    "of %d).", spacing, MIN_SPACING, MAX_SPACING, DFL_SPACING);
+		return;
+	}
+	if (max_pts == 0)
+		max_pts = DFL_MAX_PTS;
+	if (max_pts < 2) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Passed invalid `max_pts' value (%d), must be an integer "
+		    "greater than or equal to 2 (or 0 if you want the default "
+		    "value of %d).", max_pts, DFL_MAX_PTS);
+		return;
+	}
+
 	memset(&rm, 0, sizeof (rm));
 	rm.inited = B_TRUE;
+	rm.spacing = spacing;
+	rm.max_pts = max_pts;
 
 	tile_path = (*env)->GetStringUTFChars(env, tile_path_str, NULL);
 
@@ -417,10 +457,10 @@ tile_water_mask_read(tile_t *tile, double fract_lat, double fract_lon)
 static inline double
 tile_elev_read(geo_pos2_t p, bool_t *water)
 {
-	unsigned tile_lat = floor(p.lat / 10.0);
-	unsigned tile_lon = floor(p.lon / 10.0);
-	double tile_lat_fract = ((p.lat / 10) - tile_lat);
-	double tile_lon_fract = ((p.lon / 10) - tile_lon);
+	unsigned tile_lat = floor((p.lat + 90) / 10.0);
+	unsigned tile_lon = floor((p.lon + 180) / 10.0);
+	double tile_lat_fract = (((p.lat + 90) / 10) - tile_lat);
+	double tile_lon_fract = (((p.lon + 180) / 10) - tile_lon);
 	tile_t *tile;
 
 	ASSERT3U(tile_lat, <, NUM_LAT);
@@ -452,8 +492,8 @@ relief_construct(geo_pos2_t p1, geo_pos2_t p2, double *elev, bool_t *water,
 		 * normalize_hdg here is used to make sure we handle
 		 * longitude wrapping correctly.
 		 */
-		elev[i] = tile_elev_read(GEO_POS2(p1.lat + 90 + f * d_lat,
-		    normalize_hdg(p1.lon + 180 + f * d_lon)), &water[i]);
+		elev[i] = tile_elev_read(GEO_POS2(p1.lat + f * d_lat,
+		    p1.lon + f * d_lon), &water[i]);
 	}
 }
 
@@ -505,12 +545,11 @@ relief_debug(double acf_elev, double twr_elev, double *elev, size_t num_pts)
 #endif	/* RELIEF_DEBUG */
 
 static double
-p2p_impl(double freq_mhz, double xmit_gain, double recv_min_gain,
-    geo_pos3_t acf_pos, geo_pos3_t twr_pos, double *terr_elev, bool_t *water_p)
+p2p_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
+    double recv_min_gain, geo_pos3_t acf_pos, geo_pos3_t twr_pos,
+    bool_t relaxed, double *terr_elev, bool_t *water_p)
 {
 	enum {
-	    MAX_PTS = 400,
-	    SPACING = 1000,	/* meters */
 	    MIN_DIST = 1000,	/* meters */
 	    MAX_DIST = 600000,	/* meters */
 	    MIN_ACF_HGT = 6,	/* meters */
@@ -524,6 +563,8 @@ p2p_impl(double freq_mhz, double xmit_gain, double recv_min_gain,
 	size_t num_pts;
 	double *elev = NULL;
 	bool_t *water = NULL;
+	double water_sum = 0, water_fract = 0;
+	double cond, dielec;
 
 	/*
 	 * Stations are too far apart, no chance of them seeing each other.
@@ -531,30 +572,41 @@ p2p_impl(double freq_mhz, double xmit_gain, double recv_min_gain,
 	if (dist >= MAX_DIST)
 		goto errout;
 
-	num_pts = clampi(dist / SPACING, 2, MAX_PTS);
+	num_pts = clampi(dist / rm.spacing, 2, rm.max_pts);
 	elev = malloc(num_pts * sizeof (*elev));
 	water = malloc(num_pts * sizeof (*water));
 	relief_construct(GEO3_TO_GEO2(acf_pos), GEO3_TO_GEO2(twr_pos),
 	    elev, water, num_pts);
 
+	for (size_t i = 0; i < num_pts; i++)
+		water_sum += water[i];
+	water_fract = clamp(water_sum / num_pts, 0, 1);
+	cond = wavg(ITM_CONDUCT_GND_AVG, ITM_CONDUCT_WATER_FRESH, water_fract);
+	dielec = wavg(ITM_DIELEC_GND_AVG, ITM_DIELEC_WATER_FRESH, water_fract);
+
 	acf_hgt = MAX(acf_pos.elev - elev[0], MIN_ACF_HGT);
 	twr_hgt = MAX(twr_pos.elev - elev[num_pts - 1], MIN_TWR_HGT);
 
+#ifdef	RELIEF_DEBUG
+	relief_debug(acf_pos.elev, twr_pos.elev, elev, num_pts);
+#endif
+
 	error = itm_point_to_pointMDH(elev, num_pts, dist,
-	    acf_hgt, twr_hgt, ITM_DIELEC_GND_AVG, ITM_CONDUCT_GND_AVG,
-	    ITM_NS_AVG, freq_mhz, ITM_ENV_CONTINENTAL_TEMPERATE, ITM_POL_HORIZ,
-	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
-	if (error > ITM_RESULT_ERANGE_MULTI)
+	    acf_hgt, twr_hgt, dielec, cond, ITM_NS_AVG, freq_mhz,
+	    ITM_ENV_CONTINENTAL_TEMPERATE,
+	    horiz_pol ? ITM_POL_HORIZ : ITM_POL_VERT, ITM_ACCUR_MAX,
+	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
+	if (!relaxed && error > ITM_RESULT_ERANGE_MULTI) {
+		throw(env, "java/lang/RuntimeException", "ITM error: %d",
+		    error);
 		goto errout;
+	}
 
 	if (terr_elev != NULL) {
 		*terr_elev = elev[0];
 		*water_p = water[0];
 	}
 
-#ifdef	RELIEF_DEBUG
-	relief_debug(acf_pos.elev, twr_pos.elev, elev, num_pts);
-#endif
 	free(elev);
 	free(water);
 
@@ -562,9 +614,7 @@ p2p_impl(double freq_mhz, double xmit_gain, double recv_min_gain,
 errout:
 	if (terr_elev != NULL) {
 		ASSERT(water_p != NULL);
-		geo_pos2_t tile_pos = GEO_POS2(acf_pos.lat + 90,
-		    acf_pos.lon + 180);
-		*terr_elev = tile_elev_read(tile_pos, water_p);
+		*terr_elev = tile_elev_read(GEO3_TO_GEO2(acf_pos), water_p);
 	}
 	free(elev);
 	free(water);
@@ -573,18 +623,15 @@ errout:
 
 JNIEXPORT jdouble JNICALL
 Java_RadioModel_pointToPoint(JNIEnv *env, jclass cls, jdouble freq_mhz,
-    jdouble xmit_gain, jdouble recv_min_gain,
+    jboolean horiz_pol, jdouble xmit_gain, jdouble recv_min_gain,
     jdouble acf_lat, jdouble acf_lon, jdouble acf_elev,
-    jdouble twr_lat, jdouble twr_lon, jdouble twr_elev)
+    jdouble twr_lat, jdouble twr_lon, jdouble twr_elev,
+    jboolean itm_relaxed)
 {
 	UNUSED(cls);
 
-	if (!rm.inited) {
-		throw(env, "java/lang/ExceptionInInitializerError",
-		    "RadioModel not initialized. You must call "
-		    "RadioModel.init() first");
+	if (!init_test(env))
 		return (0);
-	}
 	if (!validate_freq(env, freq_mhz))
 		return (0);
 	if (!is_valid_lat(acf_lat) || !is_valid_lon(acf_lon) ||
@@ -596,9 +643,9 @@ Java_RadioModel_pointToPoint(JNIEnv *env, jclass cls, jdouble freq_mhz,
 		return (0);
 	}
 
-	return (p2p_impl(freq_mhz, xmit_gain, recv_min_gain,
+	return (p2p_impl(env, freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
 	    GEO_POS3(acf_lat, acf_lon, acf_elev),
-	    GEO_POS3(twr_lat, twr_lon, twr_elev), NULL, NULL));
+	    GEO_POS3(twr_lat, twr_lon, twr_elev), itm_relaxed, NULL, NULL));
 }
 
 static inline uint32_t
@@ -633,28 +680,83 @@ get_terr_color(double elev)
 	return (terr_colors[idx]);
 }
 
+static void
+paint_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
+    double recv_min_gain, geo_pos3_t twr, geo_pos2_t ctr, double acf_elev,
+    int x, int y, int pixel_size, double deg_range, uint8_t *pixels)
+{
+	double lon = ctr.lon + ((x / (double)pixel_size) - 0.5) * deg_range;
+	double lat = ctr.lat - ((y / (double)pixel_size) - 0.5) * deg_range;
+	double elev, signal_db, signal_rel, signal_rel_quant;
+	bool_t water;
+	uint32_t terr_color;
+	uint32_t pixel, rem;
+	uint8_t r, g, b, rem_r, rem_g, rem_b;
+	double d_lat = ABS(lat - twr.lat);
+	double d_lon = ABS(lon - twr.lon);
+
+	if (sqrt(POW2(d_lat) + POW2(d_lon)) > 5)
+		return;
+
+	terr_color = *(uint32_t *)(&pixels[4 * (y * pixel_size + x)]);
+	signal_db = p2p_impl(env, freq_mhz, horiz_pol, xmit_gain,
+	    recv_min_gain, GEO_POS3(lat, lon, acf_elev), twr, B_TRUE,
+	    &elev, &water);
+	signal_rel = iter_fract(signal_db, recv_min_gain,
+	    xmit_gain - 90, B_TRUE);
+
+	r = (terr_color & 0xff0000) >> 16;
+	g = (terr_color & 0xff00) >> 8;
+	b = (terr_color & 0xff);
+	rem = 0xffffffffu - terr_color;
+	rem_r = (rem & 0xff0000) >> 16;
+	rem_g = (rem & 0xff00) >> 8;
+	rem_b = (rem & 0xff);
+
+	signal_rel_quant = floor(signal_rel * 10) / 10;
+	if (ABS(signal_rel - signal_rel_quant) < 0.005 && signal_rel > 0.05) {
+		r -= r / 8;
+		g -= g / 8;
+		b -= b / 8;
+	}
+	pixel = 0xff000000u |
+	    (r + (uint32_t)(rem_r * signal_rel_quant)) << 16 |
+	    (g + (uint32_t)(rem_g * signal_rel_quant)) << 8 |
+	    (b + (uint32_t)(rem_b * signal_rel_quant));
+	*(uint32_t *)(&pixels[4 * (y * pixel_size + x)]) = pixel;
+}
+
 JNIEXPORT void JNICALL
-Java_RadioModel_paintMap(JNIEnv *env, jclass cls, jdouble freq_mhz,
-    jdouble xmit_gain, jdouble recv_min_gain, jdouble acf_elev,
-    jdouble twr_lat, jdouble twr_lon, jdouble twr_elev,
-    jdouble deg_range, jint pixel_size, jstring out_file_str)
+Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
+    jboolean horiz_pol, jdouble xmit_gain, jdouble recv_min_gain,
+    jdouble acf_elev, jdoubleArray twr_lats, jdoubleArray twr_lons,
+    jdoubleArray twr_elevs, jdouble deg_range, jdouble ctr_lat,
+    jdouble ctr_lon, jint pixel_size, jstring out_file_str)
 {
 	uint8_t *pixels;
 	const char *out_file;
-	size_t samples = 0;
-	uint64_t start, end;
+	unsigned n_lats = (*env)->GetArrayLength(env, twr_lats);
+	unsigned n_lons = (*env)->GetArrayLength(env, twr_lons);
+	unsigned n_elevs = (*env)->GetArrayLength(env, twr_elevs);
+	jdouble *lats, *lons, *elevs;
 
 	UNUSED(cls);
 
-	if (!validate_freq(env, freq_mhz))
+	if (!init_test(env) || !validate_freq(env, freq_mhz))
 		return;
-	if (!is_valid_elev(acf_elev) || !is_valid_lat(twr_lat) ||
-	    !is_valid_lon(twr_lon) || !is_valid_elev(twr_elev)) {
+	if (!is_valid_elev(acf_elev) || !is_valid_lat(ctr_lat) ||
+	    !is_valid_lon(ctr_lon)) {
 		throw(env, "java/lang/IllegalArgumentException",
-		    "Invalid aircraft or tower lat x lon x elevation passed "
-		    "(%f, %f, %f, %f). Coordinates must be in degrees x "
-		    "degrees x meters AMSL.", acf_elev, twr_lat, twr_lon,
-		    twr_elev);
+		    "Invalid aircraft elevation or center lat x lon passed "
+		    "(%f, %f, %f). Coordinates must be in degrees or meters.",
+		    acf_elev, ctr_lat, ctr_lon);
+		return;
+	}
+	if (n_lats != n_lons || n_lats != n_elevs) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "`twr_lat', `twr_lons' and `twr_elevs' arrays must "
+		    "contain the same number of elements (%d, %d, %d).",
+		    n_lats, n_lons, n_elevs);
 		return;
 	}
 	if (deg_range <= 0 || deg_range >= 90) {
@@ -669,65 +771,94 @@ Java_RadioModel_paintMap(JNIEnv *env, jclass cls, jdouble freq_mhz,
 		    "integer not greater than 8192", pixel_size);
 		return;
 	}
+	if (-(90 - xmit_gain) < recv_min_gain) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "xmit_gain (%.1f dB) is too low to receive using "
+		    "recv_min_gain (%.1f dB). Increase xmit_gain.",
+		    xmit_gain, recv_min_gain);
+		return;
+	}
+	lats = (*env)->GetDoubleArrayElements(env, twr_lats, NULL);
+	lons = (*env)->GetDoubleArrayElements(env, twr_lons, NULL);
+	elevs = (*env)->GetDoubleArrayElements(env, twr_elevs, NULL);
+	for (unsigned i = 0; i < n_lats; i++) {
+		if (!is_valid_lat(lats[i]) || !is_valid_lon(lons[i]) ||
+		    !is_valid_elev(elevs[i])) {
+			throw(env, "java/lang/IllegalArgumentException",
+			    "lat/lon/elev index %d (%f, %f, %f) invalid. "
+			    "Must be degrees x degrees x meters.", i,
+			    lats[i], lons[i], elevs[i]);
+			(*env)->ReleaseDoubleArrayElements(env, twr_lats, lats,
+			    JNI_ABORT);
+			(*env)->ReleaseDoubleArrayElements(env, twr_lons, lons,
+			    JNI_ABORT);
+			(*env)->ReleaseDoubleArrayElements(env, twr_elevs, elevs,
+			    JNI_ABORT);
+			return;
+		}
+	}
 
 	out_file = (*env)->GetStringUTFChars(env, out_file_str, NULL);
 	pixels = malloc(4 * pixel_size * pixel_size);
 
-	start = microclock();
-
 	for (int y = 0; y < pixel_size; y++) {
 		for (int x = 0; x < pixel_size; x++) {
-			double lon = twr_lon +
+			double lon = ctr_lon +
 			    ((x / (double)pixel_size) - 0.5) * deg_range;
-			double lat = twr_lat -
+			double lat = ctr_lat -
 			    ((y / (double)pixel_size) - 0.5) * deg_range;
-			double elev;
-			bool_t water;
-			double signal_db = p2p_impl(freq_mhz, xmit_gain,
-			    recv_min_gain, GEO_POS3(lat, lon, acf_elev),
-			    GEO_POS3(twr_lat, twr_lon, twr_elev), &elev,
+			bool_t water = B_FALSE;
+			double elev = tile_elev_read(GEO_POS2(lat, lon),
 			    &water);
-			UNUSED(signal_db);
-			double signal_rel =
-			    1 - clamp(signal_db / recv_min_gain, 0, 1);
-			uint32_t terr_color = get_terr_color(elev);
-			uint32_t pixel, rem;
-			uint8_t r, g, b, rem_r, rem_g, rem_b;
+			uint32_t terr_color;
 
 			if (water)
 				terr_color = 0xffff8f47u;
-			r = (terr_color & 0xff0000) >> 16;
-			g = (terr_color & 0xff00) >> 8;
-			b = (terr_color & 0xff);
-			rem = 0xffffffffu - terr_color;
-			rem_r = (rem & 0xff0000) >> 16;
-			rem_g = (rem & 0xff00) >> 8;
-			rem_b = (rem & 0xff);
-
-			signal_rel = round(signal_rel * 20) / 20;
-			pixel = 0xff000000u |
-			    (r + (uint32_t)(rem_r * signal_rel)) << 16 |
-			    (g + (uint32_t)(rem_g * signal_rel)) << 8 |
-			    (b + (uint32_t)(rem_b * signal_rel));
-
+			else
+				terr_color = get_terr_color(elev);
 			*(uint32_t *)(&pixels[4 * (y * pixel_size + x)]) =
-			    pixel;
+			    terr_color;
 		}
 	}
 
-	end = microclock();
-	if (samples % 100000 == 0) {
-		printf("took %.3fs @ %llu samples / sec\n",
-		    USEC2SEC(end - start),
-		    (unsigned long long)((pixel_size * pixel_size) /
-		    USEC2SEC(end - start)));
-	}
+	for (unsigned i = 0; i < n_lats; i++) {
+		geo_pos3_t twr_pos = GEO_POS3(lats[i], lons[i], elevs[i]);
 
+		for (int y = 0; y < pixel_size; y++) {
+			for (int x = 0; x < pixel_size; x++) {
+				paint_impl(env, freq_mhz, horiz_pol, xmit_gain,
+				    recv_min_gain, twr_pos,
+				    GEO_POS2(ctr_lat, ctr_lon), acf_elev, x, y,
+				    pixel_size, deg_range, pixels);
+			}
+		}
+	}
 	if (!png_write_to_file_rgba(out_file, pixel_size, pixel_size, pixels)) {
 		throw(env, "java/lang/IllegalArgumentException",
 		    "Error writing png file %s", out_file);
 	}
-
 	free(pixels);
 	(*env)->ReleaseStringUTFChars(env, out_file_str, out_file);
+	(*env)->ReleaseDoubleArrayElements(env, twr_lats, lats, JNI_ABORT);
+	(*env)->ReleaseDoubleArrayElements(env, twr_lons, lons, JNI_ABORT);
+	(*env)->ReleaseDoubleArrayElements(env, twr_elevs, elevs, JNI_ABORT);
+}
+
+JNIEXPORT jdouble JNICALL
+Java_RadioModel_elevProbe(JNIEnv *env, jclass cls, jdouble lat, jdouble lon)
+{
+	bool_t water;
+
+	UNUSED(cls);
+
+	if (!init_test(env))
+		return (0);
+	if (!is_valid_lat(lat) || !is_valid_lon(lon)) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Invalid lat x lon (%f, %f). Coordinates must be "
+		    "in degrees", lat, lon);
+		return (0);
+	}
+
+	return (tile_elev_read(GEO_POS2(lat, lon), &water));
 }

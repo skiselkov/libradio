@@ -6,10 +6,7 @@ public class Test {
 
     public static void main(String[] args)
     {
-//	double acf_lat = 34.9425;
-//	double acf_lon = -118.408;
-//	double acf_elev = 2000;
-
+	/* elevations in feet */
 	double[][] locations = {
 	    {33.9425, -118.408, 127},	/* LAX */
 	    {34.6293, -118.084, 2542},	/* PMD */
@@ -27,19 +24,13 @@ public class Test {
 	    "06_MtWilson"
 	};
 	double[] acf_hgt = {0, 5000, 10000, 20000, 30000};
-	double deg_range = 5;
 	double[] xmit_power = {40, 50, 80};
 	double recv_min_gain = -100;
 	int resolution = 1024;
 
-	RadioModel.init("data");
-
-	System.out.println("bytes consumed: " + RadioModel.countBytes());
-
-/*
-	System.out.println("gain is: " + RadioModel.pointToPoint(135, 90, -90,
-	    acf_lat, acf_lon, acf_elev, LAX_lat, LAX_lon, LAX_elev));
-*/
+	RadioModel.init("data", 0, 0);
+	System.out.println("Memory used: " +
+	    (RadioModel.countBytes() >> 20) + " MB");
 
 	for (int i = 0; i < locations.length; i++) {
 		for (int j = 0; j < acf_hgt.length; j++) {
@@ -47,13 +38,22 @@ public class Test {
 				double twr_lat = locations[i][0];
 				double twr_lon = locations[i][1];
 				double twr_elev = locations[i][2];
+				long start, end;
+				double d_t;
 
-				RadioModel.paintMap(135, xmit_power[k],
+				start = System.currentTimeMillis();
+				RadioModel.paintMap(135, true, xmit_power[k],
 				    recv_min_gain, ft2m(twr_elev + acf_hgt[j]),
 				    twr_lat, twr_lon, ft2m(twr_elev) + 40,
-				    deg_range, resolution, "out2/" +
+				    xmit_power[k] / 10, resolution, "out2/" +
 				    filenames[i] + "_" + (int)acf_hgt[j] +
 				    "ft_" + (int)xmit_power[k] + "dB.png");
+				end = System.currentTimeMillis();
+				d_t = (end - start) / 1000.0;
+
+				System.out.format("took %.3fs @ %d " +
+				    "samples / sec\n", d_t,
+				    (long)((resolution * resolution) / d_t));
 			}
 		}
 	}
