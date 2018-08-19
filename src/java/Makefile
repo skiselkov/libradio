@@ -37,8 +37,7 @@ CFLAGS = \
 CXXFLAGS = $(DEFINES) -fPIC -O2 -g
 
 LIBS = \
-    -L$(ACFUTILS)/qmake/lin64 -lacfutils \
-    -lstdc++ -static-libstdc++ -static-libgcc -lm \
+    -L$(ACFUTILS)/qmake/lin64 -lacfutils -lm -static-libstdc++ -static-libgcc \
     $(shell $(ACFUTILS)/pkg-config-deps linux-64 --libs)
 
 all : $(CLASSES) libRadioModel.so
@@ -52,4 +51,4 @@ libRadioModel.so : $(OBJS)
 	javah $(basename $^)
 
 clean :
-	rm -f $(OBJS) $(CLASSES)
+	rm -f $(OBJS) $(CLASSES) libRadioModel.so
