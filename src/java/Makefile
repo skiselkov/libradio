@@ -58,4 +58,4 @@ lib/libRadioModel.so : $(OBJS)
 	javah $(basename $^)
 
 clean :
-	rm -f $(OBJS) $(CLASSES) lib/libRadioModel.so
+	rm -f $(OBJS) $(CLASSES) lib/libRadioModel.so RadioModel.zip
