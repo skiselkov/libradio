@@ -40,9 +40,10 @@ LIBS = -L$(ACFUTILS)/qmake/lin64 -lacfutils -lm -lpthread -static-libstdc++ \
     -static-libgcc \
     $(shell $(ACFUTILS)/pkg-config-deps linux-64 --libs)
 
-all : $(CLASSES) libRadioModel.so
+all : $(CLASSES) lib/libRadioModel.so
 
-libRadioModel.so : $(OBJS)
+lib/libRadioModel.so : $(OBJS)
+	mkdir -p lib
 	$(CC) $(CFLAGS) $(LDFLAGS) -shared -o $@ \
 	    -Wl,-soname,RadioModel $^ $(LIBS)
 
@@ -51,4 +52,4 @@ libRadioModel.so : $(OBJS)
 	javah $(basename $^)
 
 clean :
-	rm -f $(OBJS) $(CLASSES) libRadioModel.so
+	rm -f $(OBJS) $(CLASSES) lib/libRadioModel.so
