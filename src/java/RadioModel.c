@@ -71,6 +71,7 @@ static struct {
 	bool_t		inited;
 	unsigned	spacing;
 	unsigned	max_pts;
+	unsigned	max_dist;
 	tile_t	tiles[NUM_LAT][NUM_LON];
 } rm = { B_FALSE };
 
@@ -251,10 +252,11 @@ out:
 
 JNIEXPORT void JNICALL
 Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str,
-    jint spacing, jint max_pts)
+    jint spacing, jint max_pts, jint max_dist)
 {
 	enum { MIN_SPACING = 10, MAX_SPACING = 100000, DFL_SPACING = 500,
-	    DFL_MAX_PTS = 500 };
+	    DFL_MAX_PTS = 500, DFL_MAX_DIST = 600000, MIN_MAX_DIST = 2000,
+	    MAX_MAX_DIST = 1000000 };
 	const char *tile_path = NULL;
 	DIR *dp = NULL;
 	struct dirent *de;
@@ -286,6 +288,15 @@ Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str,
 		    "Passed invalid `max_pts' value (%d), must be an integer "
 		    "greater than or equal to 2 (or 0 if you want the default "
 		    "value of %d).", max_pts, DFL_MAX_PTS);
+		return;
+	}
+	if (max_dist == 0)
+		max_dist = DFL_MAX_DIST;
+	if (max_dist < MIN_MAX_DIST || max_dist > MAX_MAX_DIST) {
+		throw(env, "java/lang/IllegalArgumentException",
+		    "Passed invalid `max_dist' value (%d), must be an integer "
+		    "greater than %d and lesser than %d).", max_dist,
+		    MIN_MAX_DIST, MAX_MAX_DIST);
 		return;
 	}
 
@@ -513,13 +524,13 @@ validate_freq(JNIEnv *env, double freq_mhz)
 #ifdef	RELIEF_DEBUG
 
 static void
-relief_debug(double acf_elev, double twr_elev, double *elev, size_t num_pts)
+relief_debug(double sta1_elev, double sta2_elev, double *elev, size_t num_pts)
 {
 	enum { MULT = 5, HEIGHT = 350 };
 	cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
 	    MULT * num_pts, HEIGHT);
 	cairo_t *cr = cairo_create(surf);
-	double max_elev = MAX(acf_elev, twr_elev);
+	double max_elev = MAX(sta1_elev, sta2_elev);
 
 	for (size_t i = 0; i < num_pts; i++)
 		max_elev = MAX(max_elev, elev[i]);
@@ -545,21 +556,19 @@ relief_debug(double acf_elev, double twr_elev, double *elev, size_t num_pts)
 #endif	/* RELIEF_DEBUG */
 
 static double
-p2p_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
-    double recv_min_gain, geo_pos3_t acf_pos, geo_pos3_t twr_pos,
-    bool_t relaxed, double *terr_elev, bool_t *water_p)
+p2p_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
+    double recv_min_gain, geo_pos3_t sta1_pos, geo_pos3_t sta2_pos,
+    double *terr_elev, bool_t *water_p)
 {
 	enum {
 	    MIN_DIST = 1000,	/* meters */
-	    MAX_DIST = 600000,	/* meters */
-	    MIN_ACF_HGT = 6,	/* meters */
-	    MIN_TWR_HGT = 20	/* meters */
+	    MIN_STA_HGT = 3	/* meters */
 	};
-	vect3_t v1 = geo2ecef_mtr(acf_pos, &wgs84);
-	vect3_t v2 = geo2ecef_mtr(twr_pos, &wgs84);
-	double dist = clamp(vect3_abs(vect3_sub(v1, v2)), MIN_DIST, MAX_DIST);
-	int error;
-	double acf_hgt, twr_hgt, dbloss;
+	vect3_t v1 = geo2ecef_mtr(sta1_pos, &wgs84);
+	vect3_t v2 = geo2ecef_mtr(sta2_pos, &wgs84);
+	double dist =
+	    clamp(vect3_abs(vect3_sub(v1, v2)), MIN_DIST, rm.max_dist);
+	double sta1_hgt, sta2_hgt, dbloss;
 	size_t num_pts;
 	double *elev = NULL;
 	bool_t *water = NULL;
@@ -569,13 +578,13 @@ p2p_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
 	/*
 	 * Stations are too far apart, no chance of them seeing each other.
 	 */
-	if (dist >= MAX_DIST)
+	if (dist >= rm.max_dist)
 		goto errout;
 
 	num_pts = clampi(dist / rm.spacing, 2, rm.max_pts);
 	elev = malloc(num_pts * sizeof (*elev));
 	water = malloc(num_pts * sizeof (*water));
-	relief_construct(GEO3_TO_GEO2(acf_pos), GEO3_TO_GEO2(twr_pos),
+	relief_construct(GEO3_TO_GEO2(sta1_pos), GEO3_TO_GEO2(sta2_pos),
 	    elev, water, num_pts);
 
 	for (size_t i = 0; i < num_pts; i++)
@@ -584,23 +593,18 @@ p2p_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
 	cond = wavg(ITM_CONDUCT_GND_AVG, ITM_CONDUCT_WATER_FRESH, water_fract);
 	dielec = wavg(ITM_DIELEC_GND_AVG, ITM_DIELEC_WATER_FRESH, water_fract);
 
-	acf_hgt = MAX(acf_pos.elev - elev[0], MIN_ACF_HGT);
-	twr_hgt = MAX(twr_pos.elev - elev[num_pts - 1], MIN_TWR_HGT);
+	sta1_hgt = MAX(sta1_pos.elev - elev[0], MIN_STA_HGT);
+	sta2_hgt = MAX(sta2_pos.elev - elev[num_pts - 1], MIN_STA_HGT);
 
 #ifdef	RELIEF_DEBUG
-	relief_debug(acf_pos.elev, twr_pos.elev, elev, num_pts);
+	relief_debug(sta1_pos.elev, sta2_pos.elev, elev, num_pts);
 #endif
 
-	error = itm_point_to_pointMDH(elev, num_pts, dist,
-	    acf_hgt, twr_hgt, dielec, cond, ITM_NS_AVG, freq_mhz,
+	itm_point_to_pointMDH(elev, num_pts, dist,
+	    sta1_hgt, sta2_hgt, dielec, cond, ITM_NS_AVG, freq_mhz,
 	    ITM_ENV_CONTINENTAL_TEMPERATE,
 	    horiz_pol ? ITM_POL_HORIZ : ITM_POL_VERT, ITM_ACCUR_MAX,
 	    ITM_ACCUR_MAX, ITM_ACCUR_MAX, &dbloss, NULL, NULL);
-	if (!relaxed && error > ITM_RESULT_ERANGE_MULTI) {
-		throw(env, "java/lang/RuntimeException", "ITM error: %d",
-		    error);
-		goto errout;
-	}
 
 	if (terr_elev != NULL) {
 		*terr_elev = elev[0];
@@ -614,7 +618,7 @@ p2p_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
 errout:
 	if (terr_elev != NULL) {
 		ASSERT(water_p != NULL);
-		*terr_elev = tile_elev_read(GEO3_TO_GEO2(acf_pos), water_p);
+		*terr_elev = tile_elev_read(GEO3_TO_GEO2(sta1_pos), water_p);
 	}
 	free(elev);
 	free(water);
@@ -624,9 +628,8 @@ errout:
 JNIEXPORT jdouble JNICALL
 Java_RadioModel_pointToPoint(JNIEnv *env, jclass cls, jdouble freq_mhz,
     jboolean horiz_pol, jdouble xmit_gain, jdouble recv_min_gain,
-    jdouble acf_lat, jdouble acf_lon, jdouble acf_elev,
-    jdouble twr_lat, jdouble twr_lon, jdouble twr_elev,
-    jboolean itm_relaxed)
+    jdouble sta1_lat, jdouble sta1_lon, jdouble sta1_elev,
+    jdouble sta2_lat, jdouble sta2_lon, jdouble sta2_elev)
 {
 	UNUSED(cls);
 
@@ -634,18 +637,18 @@ Java_RadioModel_pointToPoint(JNIEnv *env, jclass cls, jdouble freq_mhz,
 		return (0);
 	if (!validate_freq(env, freq_mhz))
 		return (0);
-	if (!is_valid_lat(acf_lat) || !is_valid_lon(acf_lon) ||
-	    !is_valid_elev(acf_elev) || !is_valid_lat(twr_lat) ||
-	    !is_valid_lon(twr_lon) || !is_valid_elev(twr_elev)) {
+	if (!is_valid_lat(sta1_lat) || !is_valid_lon(sta1_lon) ||
+	    !is_valid_elev(sta1_elev) || !is_valid_lat(sta2_lat) ||
+	    !is_valid_lon(sta2_lon) || !is_valid_elev(sta2_elev)) {
 		throw(env, "java/lang/IllegalArgumentException",
 		    "Invalid aircraft or tower lat x lon x elevation passed "
 		    "(coordinates must be in degrees x degrees x meters AMSL)");
 		return (0);
 	}
 
-	return (p2p_impl(env, freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
-	    GEO_POS3(acf_lat, acf_lon, acf_elev),
-	    GEO_POS3(twr_lat, twr_lon, twr_elev), itm_relaxed, NULL, NULL));
+	return (p2p_impl(freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
+	    GEO_POS3(sta1_lat, sta1_lon, sta1_elev),
+	    GEO_POS3(sta2_lat, sta2_lon, sta2_elev), NULL, NULL));
 }
 
 static inline uint32_t
@@ -681,8 +684,8 @@ get_terr_color(double elev)
 }
 
 static void
-paint_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
-    double recv_min_gain, geo_pos3_t twr, geo_pos2_t ctr, double acf_elev,
+paint_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
+    double recv_min_gain, geo_pos3_t twr, geo_pos2_t ctr, double sta1_elev,
     int x, int y, int pixel_size, double deg_range, uint8_t *pixels)
 {
 	double lon = ctr.lon + ((x / (double)pixel_size) - 0.5) * deg_range;
@@ -699,9 +702,8 @@ paint_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
 		return;
 
 	terr_color = *(uint32_t *)(&pixels[4 * (y * pixel_size + x)]);
-	signal_db = p2p_impl(env, freq_mhz, horiz_pol, xmit_gain,
-	    recv_min_gain, GEO_POS3(lat, lon, acf_elev), twr, B_TRUE,
-	    &elev, &water);
+	signal_db = p2p_impl(freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
+	    GEO_POS3(lat, lon, sta1_elev), twr, &elev, &water);
 	signal_rel = iter_fract(signal_db, recv_min_gain,
 	    xmit_gain - 90, B_TRUE);
 
@@ -729,32 +731,32 @@ paint_impl(JNIEnv *env, double freq_mhz, bool_t horiz_pol, double xmit_gain,
 JNIEXPORT void JNICALL
 Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
     jboolean horiz_pol, jdouble xmit_gain, jdouble recv_min_gain,
-    jdouble acf_elev, jdoubleArray twr_lats, jdoubleArray twr_lons,
-    jdoubleArray twr_elevs, jdouble deg_range, jdouble ctr_lat,
+    jdouble sta1_elev, jdoubleArray sta2_lats, jdoubleArray sta2_lons,
+    jdoubleArray sta2_elevs, jdouble deg_range, jdouble ctr_lat,
     jdouble ctr_lon, jint pixel_size, jstring out_file_str)
 {
 	uint8_t *pixels;
 	const char *out_file;
-	unsigned n_lats = (*env)->GetArrayLength(env, twr_lats);
-	unsigned n_lons = (*env)->GetArrayLength(env, twr_lons);
-	unsigned n_elevs = (*env)->GetArrayLength(env, twr_elevs);
+	unsigned n_lats = (*env)->GetArrayLength(env, sta2_lats);
+	unsigned n_lons = (*env)->GetArrayLength(env, sta2_lons);
+	unsigned n_elevs = (*env)->GetArrayLength(env, sta2_elevs);
 	jdouble *lats, *lons, *elevs;
 
 	UNUSED(cls);
 
 	if (!init_test(env) || !validate_freq(env, freq_mhz))
 		return;
-	if (!is_valid_elev(acf_elev) || !is_valid_lat(ctr_lat) ||
+	if (!is_valid_elev(sta1_elev) || !is_valid_lat(ctr_lat) ||
 	    !is_valid_lon(ctr_lon)) {
 		throw(env, "java/lang/IllegalArgumentException",
 		    "Invalid aircraft elevation or center lat x lon passed "
 		    "(%f, %f, %f). Coordinates must be in degrees or meters.",
-		    acf_elev, ctr_lat, ctr_lon);
+		    sta1_elev, ctr_lat, ctr_lon);
 		return;
 	}
 	if (n_lats != n_lons || n_lats != n_elevs) {
 		throw(env, "java/lang/IllegalArgumentException",
-		    "`twr_lat', `twr_lons' and `twr_elevs' arrays must "
+		    "`twr_lat', `sta2_lons' and `sta2_elevs' arrays must "
 		    "contain the same number of elements (%d, %d, %d).",
 		    n_lats, n_lons, n_elevs);
 		return;
@@ -778,9 +780,9 @@ Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
 		    xmit_gain, recv_min_gain);
 		return;
 	}
-	lats = (*env)->GetDoubleArrayElements(env, twr_lats, NULL);
-	lons = (*env)->GetDoubleArrayElements(env, twr_lons, NULL);
-	elevs = (*env)->GetDoubleArrayElements(env, twr_elevs, NULL);
+	lats = (*env)->GetDoubleArrayElements(env, sta2_lats, NULL);
+	lons = (*env)->GetDoubleArrayElements(env, sta2_lons, NULL);
+	elevs = (*env)->GetDoubleArrayElements(env, sta2_elevs, NULL);
 	for (unsigned i = 0; i < n_lats; i++) {
 		if (!is_valid_lat(lats[i]) || !is_valid_lon(lons[i]) ||
 		    !is_valid_elev(elevs[i])) {
@@ -788,12 +790,12 @@ Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
 			    "lat/lon/elev index %d (%f, %f, %f) invalid. "
 			    "Must be degrees x degrees x meters.", i,
 			    lats[i], lons[i], elevs[i]);
-			(*env)->ReleaseDoubleArrayElements(env, twr_lats, lats,
-			    JNI_ABORT);
-			(*env)->ReleaseDoubleArrayElements(env, twr_lons, lons,
-			    JNI_ABORT);
-			(*env)->ReleaseDoubleArrayElements(env, twr_elevs, elevs,
-			    JNI_ABORT);
+			(*env)->ReleaseDoubleArrayElements(env,
+			    sta2_lats, lats, JNI_ABORT);
+			(*env)->ReleaseDoubleArrayElements(env,
+			    sta2_lons, lons, JNI_ABORT);
+			(*env)->ReleaseDoubleArrayElements(env,
+			    sta2_elevs, elevs, JNI_ABORT);
 			return;
 		}
 	}
@@ -822,13 +824,13 @@ Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
 	}
 
 	for (unsigned i = 0; i < n_lats; i++) {
-		geo_pos3_t twr_pos = GEO_POS3(lats[i], lons[i], elevs[i]);
+		geo_pos3_t sta2_pos = GEO_POS3(lats[i], lons[i], elevs[i]);
 
 		for (int y = 0; y < pixel_size; y++) {
 			for (int x = 0; x < pixel_size; x++) {
-				paint_impl(env, freq_mhz, horiz_pol, xmit_gain,
-				    recv_min_gain, twr_pos,
-				    GEO_POS2(ctr_lat, ctr_lon), acf_elev, x, y,
+				paint_impl(freq_mhz, horiz_pol, xmit_gain,
+				    recv_min_gain, sta2_pos,
+				    GEO_POS2(ctr_lat, ctr_lon), sta1_elev, x, y,
 				    pixel_size, deg_range, pixels);
 			}
 		}
@@ -839,9 +841,9 @@ Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
 	}
 	free(pixels);
 	(*env)->ReleaseStringUTFChars(env, out_file_str, out_file);
-	(*env)->ReleaseDoubleArrayElements(env, twr_lats, lats, JNI_ABORT);
-	(*env)->ReleaseDoubleArrayElements(env, twr_lons, lons, JNI_ABORT);
-	(*env)->ReleaseDoubleArrayElements(env, twr_elevs, elevs, JNI_ABORT);
+	(*env)->ReleaseDoubleArrayElements(env, sta2_lats, lats, JNI_ABORT);
+	(*env)->ReleaseDoubleArrayElements(env, sta2_lons, lons, JNI_ABORT);
+	(*env)->ReleaseDoubleArrayElements(env, sta2_elevs, elevs, JNI_ABORT);
 }
 
 JNIEXPORT jdouble JNICALL

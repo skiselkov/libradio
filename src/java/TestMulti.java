@@ -47,7 +47,7 @@ public class TestMulti {
 	    0,
 	    0
 	};
-	int test_type = 2;
+	int test_type = 1;
 	Pattern pat = Pattern.compile(type_regex[test_type]);
 	int resolution = 1024;
 	ArrayList<Double> lats = new ArrayList<Double>();
@@ -96,7 +96,7 @@ public class TestMulti {
 				    xmit_power[test_type], recv_min_gain,
 				    elev + ft2m(test_hgts[test_type]),
 				    lat, lon, elev + 50, deg_ranges[test_type],
-				    resolution, "out4/" + name + ".png");
+				    resolution, "out/" + name + ".png");
 				end = System.currentTimeMillis();
 				d_t = (end - start) / 1000.0;
 				System.out.format(

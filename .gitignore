@@ -4,5 +4,6 @@ src/java/RadioModel.class
 src/java/RadioModel.h
 src/java/RadioModel.o
 src/java/Test.class
+src/java/TestMulti.class
 src/java/data
 src/java/libRadioModel.so
