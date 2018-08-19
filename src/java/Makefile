@@ -25,7 +25,7 @@ OBJS = \
 DEFINES = -DIBM=0 -DLIN=1 -DAPL=0
 
 CFLAGS = \
-    $(DEFINES) -O2 -g \
+    $(DEFINES) -O3 -g3 \
     -I.. \
     -I$(ACFUTILS)/src \
     -I$(ACFUTILS)/glew \
@@ -34,13 +34,19 @@ CFLAGS = \
     $(shell $(ACFUTILS)/pkg-config-deps linux-64 --cflags) \
     -W -Wall -Wextra -Werror -Wno-unused-local-typedefs -Wunused-result
 
-CXXFLAGS = $(DEFINES) -fPIC -O2 -g
+CXXFLAGS = $(DEFINES) -fPIC -O3 -g3
 
 LIBS = -L$(ACFUTILS)/qmake/lin64 -lacfutils -lm -lpthread -static-libstdc++ \
     -static-libgcc \
     $(shell $(ACFUTILS)/pkg-config-deps linux-64 --libs)
 
 all : $(CLASSES) lib/libRadioModel.so
+zip : RadioModel.zip
+
+RadioModel.zip : $(CLASSES) lib/libRadioModel.so data
+	rm -f RadioModel.zip
+	zip -r RadioModel.zip $(CLASSES) $(patsubst %.class,%.java,$(CLASSES)) \
+	    lib/libRadioModel.so data
 
 lib/libRadioModel.so : $(OBJS)
 	mkdir -p lib
