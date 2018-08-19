@@ -36,8 +36,8 @@ CFLAGS = \
 
 CXXFLAGS = $(DEFINES) -fPIC -O2 -g
 
-LIBS = \
-    -L$(ACFUTILS)/qmake/lin64 -lacfutils -lm -static-libstdc++ -static-libgcc \
+LIBS = -L$(ACFUTILS)/qmake/lin64 -lacfutils -lm -lpthread -static-libstdc++ \
+    -static-libgcc \
     $(shell $(ACFUTILS)/pkg-config-deps linux-64 --libs)
 
 all : $(CLASSES) libRadioModel.so
