@@ -597,7 +597,8 @@ ap_drs_config(double d_t)
 	int ap_state = dr_geti(&drs.ap_state);
 	int hsi_sel = dr_geti(&drs.hsi_sel);
 	radio_t *radio;
-	double beta, hdef, hsens, intcpt, corr;
+	double beta, hdef, corr_def, intcpt, corr;
+	bool_t is_loc;
 
 	switch (hsi_sel) {
 	case 0:
@@ -610,6 +611,7 @@ ap_drs_config(double d_t)
 		dr_seti(&drs.ovrd_nav_heading, 0);
 		return;
 	}
+	is_loc = is_valid_loc_freq(radio->freq / 1000000.0);
 
 	if ((ap_state & AP_HNAV_ARM) && !(ap_state & AP_HNAV))
 		dr_seti(&drs.ap_state, AP_HNAV_ARM | AP_HNAV);
@@ -620,12 +622,33 @@ ap_drs_config(double d_t)
 	    HDEF_RATE_UPD_RATE);
 	beta = rel_hdg(normalize_hdg(dr_getf(&drs.hpath)),
 	    normalize_hdg(dr_getf(&drs.hdg)));
-	if (is_valid_loc_freq(radio->freq / 1000000.0))
-		hsens = HSENS_LOC;
+	if (is_loc)
+		corr_def = hdef * HSENS_LOC;
 	else
-		hsens = HSENS_VOR;
-
-	corr = clamp(hdef * hsens + navrad.ap.hdef_rate * HDEF_FEEDBACK,
+		corr_def = hdef * HSENS_VOR;
+	if (!isnan(radio->dme) && ABS(hdef) < HDEF_MAX) {
+		const vect2_t loc_pts[] = {
+		    VECT2(NM2MET(0), 0.5),
+		    VECT2(NM2MET(2), 0.5),
+		    VECT2(NM2MET(15), 2),
+		    VECT2(NM2MET(20), 2),
+		    NULL_VECT2
+		};
+		const vect2_t vor_pts[] = {
+		    VECT2(NM2MET(0), 0.5),
+		    VECT2(NM2MET(5), 0.5),
+		    VECT2(NM2MET(20), 2),
+		    VECT2(NM2MET(40), 2),
+		    NULL_VECT2
+		};
+		double mult;
+		if (is_loc)
+			mult = fx_lin_multi(radio->dme, loc_pts, B_TRUE);
+		else
+			mult = fx_lin_multi(radio->dme, vor_pts, B_TRUE);
+		corr_def *= mult;
+	}
+	corr = clamp(corr_def + navrad.ap.hdef_rate * HDEF_FEEDBACK,
 	    -MAX_INTCPT_ANGLE, MAX_INTCPT_ANGLE);
 	intcpt = normalize_hdg(dr_getf(&radio->drs.crs_degm_pilot) + corr +
 	    beta);
