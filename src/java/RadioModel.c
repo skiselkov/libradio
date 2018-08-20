@@ -72,7 +72,7 @@ static struct {
 	unsigned	spacing;
 	unsigned	max_pts;
 	unsigned	max_dist;
-	tile_t	tiles[NUM_LAT][NUM_LON];
+	tile_t		tiles[NUM_LAT][NUM_LON];
 } rm = { B_FALSE };
 
 static void
@@ -304,6 +304,7 @@ Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str,
 	rm.inited = B_TRUE;
 	rm.spacing = spacing;
 	rm.max_pts = max_pts;
+	rm.max_dist = max_dist;
 
 	tile_path = (*env)->GetStringUTFChars(env, tile_path_str, NULL);
 

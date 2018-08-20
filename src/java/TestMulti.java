@@ -54,7 +54,7 @@ public class TestMulti {
 	ArrayList<Double> lons = new ArrayList<Double>();
 	ArrayList<Double> elevs = new ArrayList<Double>();
 
-	RadioModel.init("data", spacing[test_type], 0);
+	RadioModel.init("data", spacing[test_type], 0, 0);
 
 	while (input.hasNext()) {
 		String line = input.nextLine();
