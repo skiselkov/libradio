@@ -147,6 +147,9 @@ typedef struct {
 struct radio_s {
 	unsigned	nr;
 
+	dr_t		fail_dr[2];
+	bool_t		failed;
+
 	mutex_t		lock;
 	uint64_t	freq;
 	double		freq_chg_t;
@@ -729,6 +732,11 @@ radio_floop_cb(radio_t *radio, double d_t)
 
 	mutex_enter(&radio->lock);
 
+	radio->failed = (dr_geti(&radio->fail_dr[0]) == 6 ||
+	    dr_geti(&radio->fail_dr[1]) == 6);
+	if (radio->failed)
+		new_freq = 0;
+
 	if (radio->freq != new_freq) {
 		radio->freq = new_freq;
 		radio->freq_chg_t = navrad.cur_t;
@@ -1310,6 +1318,8 @@ radio_init(radio_t *radio, int nr)
 	    sizeof (radio_navaid_t), offsetof(radio_navaid_t, node));
 	radio->distort_vloc = distort_init(NAVRAD_AUDIO_SRATE);
 	radio->distort_dme = distort_init(NAVRAD_AUDIO_SRATE);
+	fdr_find(&radio->fail_dr[0], "sim/operation/failures/rel_navcom%d", nr);
+	fdr_find(&radio->fail_dr[1], "sim/operation/failures/rel_nav%d", nr);
 
 	for (int i = 0; i < MAX_DR_VALS; i++) {
 		dr_create_b(&radio->dr_vals[i].id_dr, radio->dr_vals[i].id,
@@ -1851,6 +1861,8 @@ uint64_t
 navrad_get_freq(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.radios[nr].failed)
+		return (0);
 	return (navrad.radios[nr].freq);
 }
 
@@ -1858,6 +1870,8 @@ double
 navrad_get_bearing(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.radios[nr].failed)
+		return (NAN);
 	return (normalize_hdg(navrad.radios[nr].brg));
 }
 
@@ -1865,6 +1879,8 @@ double
 navrad_get_radial(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.radios[nr].failed)
+		return (NAN);
 	return (radio_get_radial(&navrad.radios[nr]));
 }
 
@@ -1872,6 +1888,8 @@ double
 navrad_get_dme(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.radios[nr].failed)
+		return (NAN);
 	return (navrad.radios[nr].dme);
 }
 
@@ -1879,6 +1897,8 @@ double
 navrad_get_hdef(unsigned nr, bool_t pilot, bool_t *tofrom)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.radios[nr].failed)
+		return (NAN);
 	return (radio_get_hdef(&navrad.radios[nr], pilot, tofrom));
 }
 
@@ -1886,6 +1906,8 @@ double
 navrad_get_vdef(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.radios[nr].failed)
+		return (NAN);
 	return (navrad.radios[nr].vdef);
 }
 
@@ -1905,6 +1927,8 @@ navrad_get_ID(unsigned nr, char id[8])
 
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
 	radio = &navrad.radios[nr];
+	if (radio->failed)
+		return (B_FALSE);
 
 	mutex_enter(&radio->lock);
 	rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
@@ -1987,6 +2011,10 @@ navrad_get_audio_buf(unsigned nr, double volume, bool_t is_dme,
 
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
 	radio = &navrad.radios[nr];
+	if (radio->failed) {
+		*num_samples = 0;
+		return (NULL);
+	}
 	tree = (!is_dme ? &radio->vlocs : &radio->dmes);
 	distort = (!is_dme ? radio->distort_vloc : radio->distort_dme);
 
