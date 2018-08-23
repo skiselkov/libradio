@@ -267,6 +267,7 @@ static struct {
 	dr_t		hdg;
 	dr_t		hpath;
 	dr_t		alpha;
+	dr_t		ap_bc;
 } drs;
 
 static const char *morse_table[] = {
@@ -418,8 +419,32 @@ static double radio_get_dme(radio_t *radio);
 static void radio_brg_update(radio_t *radio, double d_t);
 static void radio_dme_update(radio_t *radio, double d_t);
 
+/*
+ * Computes the actual signal level at the receiver, applying various
+ * propagation modeling modifiers depending on the type of navaid and
+ * our relative position to it. Depending on navaid type, this function
+ * modifies the signals as follows:
+ *
+ * 1) For VORs, when in line-of-sight propagation mode, we simulate the
+ *	cone of confusion above the VOR station.
+ * 2) For VORs, we suppress the transmission level by up to 20 dB,
+ *	depending on the declared service volume for the navaid. This
+ *	avoids too much interference from VORs intended for short-range
+ *	navigation up at the high flight levels.
+ * 3) For DMEs, applies a similar service-volume modification curve to
+ *	the signal level. If the DME has a non-NAN `brg' passed as an
+ *	argument, it is assumed to be a bearing-biased DME and we will
+ *	apply the LOC signal curve.
+ * 4) For LOCs, applies signal diminishing based on service volume AND
+ *	diminishes the signal even more with increasing lateral deviation
+ *	from the LOC centerline. If `has_bc' is B_TRUE, this maintains a
+ *	somewhat narrower signal beam at the backcourse to the navaid.
+ *	If `has_bc' is B_FALSE, no back-beam projection is simulated.
+ * 5) For GSes does the same as for LOCs, except that no back-beam
+ *	projection is simulated here.
+ */
 static void
-comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp)
+comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 {
 	const vect2_t vor_dist_curve[] = {
 	    VECT2(NM2MET(0), -20),
@@ -464,6 +489,13 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp)
 	    VECT2(120, -20),
 	    VECT2(160, -10),
 	    VECT2(180, -3),
+	    NULL_VECT2
+	};
+	const vect2_t loc_rbrg_nobc_curve[] = {
+	    VECT2(0, 0),
+	    VECT2(30, -5),
+	    VECT2(60, -15),
+	    VECT2(90, -30),
 	    NULL_VECT2
 	};
 	const vect2_t gs_rbrg_curve[] = {
@@ -515,6 +547,23 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp)
 			rnav->signal_db = rnav->signal_db_omni +
 			    fx_lin_multi(nav->range, ils_dme_dist_curve,
 			    B_TRUE);
+			if (!isnan(brg)) {
+				/*
+				 * On directional & paired DMEs, apply
+				 * appropriate bearing bias to the signal
+				 * level (especially important for opposing
+				 * runways using the same ILS frequency!)
+				 */
+				double brg_fm_nav = brg2navaid(nav, NULL);
+				double rbrg = fabs(rel_hdg(brg, brg_fm_nav));
+				if (has_bc) {
+					rnav->signal_db += fx_lin_multi(rbrg,
+					    loc_rbrg_curve, B_TRUE);
+				} else {
+					rnav->signal_db += fx_lin_multi(rbrg,
+					    loc_rbrg_nobc_curve, B_TRUE);
+				}
+			}
 		} else {
 			rnav->signal_db = rnav->signal_db_omni +
 			    fx_lin_multi(nav->range, dme_dist_curve, B_TRUE);
@@ -529,7 +578,13 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp)
 		double signal_db = rnav->signal_db_omni;
 
 		if (nav->type == NAVAID_LOC) {
-			signal_db += fx_lin_multi(rbrg, loc_rbrg_curve, B_TRUE);
+			if (has_bc) {
+				signal_db += fx_lin_multi(rbrg,
+				    loc_rbrg_curve, B_TRUE);
+			} else {
+				signal_db += fx_lin_multi(rbrg,
+				    loc_rbrg_nobc_curve, B_TRUE);
+			}
 			signal_db += fx_lin_multi(nav->range, loc_dist_curve,
 			    B_TRUE);
 		} else {
@@ -583,14 +638,69 @@ audio_buf_chunks_encode(radio_navaid_t *rnav)
 	}
 }
 
+/*
+ * Locates a navaid which might be conflicting with `rnav' in tree `tree'.
+ * This is used to locate conflicting opposite-facing LOC transmitters and
+ * disable back-beam simulation. IRL these two transmitters would never be
+ * run at the same time, but we don't know which one is currently in use,
+ * so we instead modify the transmission diagram to kill the back-beam.
+ */
+static navaid_t *
+find_conflicting_navaid(avl_tree_t *tree, radio_navaid_t *rnav)
+{
+	navaid_t *nav = rnav->navaid;
+
+	if (nav->type != NAVAID_LOC && nav->type != NAVAID_DME)
+		return (NULL);
+
+	for (radio_navaid_t *oth_rnav = avl_first(tree); oth_rnav != NULL;
+	    oth_rnav = AVL_NEXT(tree, oth_rnav)) {
+		navaid_t *oth_nav = oth_rnav->navaid;
+
+		if (oth_rnav == rnav)
+			continue;
+		if (strcmp(oth_nav->icao, nav->icao) == 0)
+			return (oth_nav);
+	}
+
+	return (NULL);
+}
+
+static double
+find_paired_loc_brg(avl_tree_t *tree, radio_navaid_t *rnav)
+{
+	navaid_t *nav = rnav->navaid;
+
+	ASSERT3U(nav->type, ==, NAVAID_DME);
+
+	for (radio_navaid_t *oth_rnav = avl_first(tree); oth_rnav != NULL;
+	    oth_rnav = AVL_NEXT(tree, oth_rnav)) {
+		navaid_t *oth_nav = oth_rnav->navaid;
+
+		if (oth_nav->type == NAVAID_LOC &&
+		    strcmp(nav->id, oth_nav->id) == 0 &&
+		    strcmp(nav->icao, oth_nav->icao) == 0) {
+			return (oth_nav->loc.brg);
+		}
+	}
+
+	return (NAN);
+}
+
 static void
-signal_levels_update(avl_tree_t *tree, double d_t, fpp_t *fpp)
+signal_levels_update(avl_tree_t *tree, double d_t, fpp_t *fpp,
+    avl_tree_t *vlocs_tree)
 {
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
+		bool_t has_bc = (find_conflicting_navaid(tree, rnav) == NULL);
+		double brg = NAN;
+
+		if (vlocs_tree != NULL)
+			brg = find_paired_loc_brg(vlocs_tree, rnav);
 		FILTER_IN(rnav->signal_db_omni, rnav->signal_db_tgt, d_t,
 		    USEC2SEC(WORKER_INTVAL));
-		comp_signal_db(rnav, fpp);
+		comp_signal_db(rnav, fpp, has_bc, brg);
 	}
 }
 
@@ -625,14 +735,21 @@ ap_drs_config(double d_t)
 	    HDEF_RATE_UPD_RATE);
 	beta = rel_hdg(normalize_hdg(dr_getf(&drs.hpath)),
 	    normalize_hdg(dr_getf(&drs.hdg)));
-	if (is_loc)
-		corr_def = hdef * HSENS_LOC;
-	else
+	if (is_loc) {
+		const vect2_t sens[] = {
+		    VECT2(0, 24),
+		    VECT2(0.5, 18),
+		    VECT2(2.5, HSENS_LOC),
+		    NULL_VECT2
+		};
+		corr_def = hdef * fx_lin_multi(ABS(hdef), sens, B_TRUE);
+	} else {
 		corr_def = hdef * HSENS_VOR;
+	}
 	if (!isnan(radio->dme) && ABS(hdef) < HDEF_MAX) {
 		const vect2_t loc_pts[] = {
-		    VECT2(NM2MET(0), 0.5),
-		    VECT2(NM2MET(2), 0.5),
+		    VECT2(NM2MET(0), 0.75),
+		    VECT2(NM2MET(1), 0.75),
 		    VECT2(NM2MET(15), 2),
 		    VECT2(NM2MET(20), 2),
 		    NULL_VECT2
@@ -653,6 +770,8 @@ ap_drs_config(double d_t)
 	}
 	corr = clamp(corr_def + navrad.ap.hdef_rate * HDEF_FEEDBACK,
 	    -MAX_INTCPT_ANGLE, MAX_INTCPT_ANGLE);
+	if (dr_geti(&drs.ap_bc) != 0)
+		corr = -corr;
 	intcpt = normalize_hdg(dr_getf(&radio->drs.crs_degm_pilot) + corr +
 	    beta);
 	FILTER_IN(navrad.ap.steer_tgt, intcpt, d_t, AP_STEER_UPD_RATE);
@@ -742,9 +861,9 @@ radio_floop_cb(radio_t *radio, double d_t)
 		radio->freq_chg_t = navrad.cur_t;
 	}
 
-	signal_levels_update(&radio->vlocs, d_t, &fpp);
-	signal_levels_update(&radio->gses, d_t, &fpp);
-	signal_levels_update(&radio->dmes, d_t, &fpp);
+	signal_levels_update(&radio->vlocs, d_t, &fpp, NULL);
+	signal_levels_update(&radio->gses, d_t, &fpp, NULL);
+	signal_levels_update(&radio->dmes, d_t, &fpp, &radio->vlocs);
 
 	ap_drs_config(d_t);
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
@@ -1418,13 +1537,13 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 
 		if (signal_db < recv_floor)
 			continue;
-		if (strongest == NULL)
+		if (strongest == NULL) {
 			strongest = rnav;
-		if (signal_db > strongest->signal_db) {
+		} else if (signal_db > strongest->signal_db) {
 			second = strongest;
 			strongest = rnav;
-		} else if (second != NULL &&
-		    rnav->signal_db > second->signal_db) {
+		} else if (second == NULL || (second != NULL &&
+		    rnav->signal_db > second->signal_db)) {
 			second = rnav;
 		}
 	}
@@ -1433,7 +1552,7 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 
 	if (second != NULL &&
 	    strongest->signal_db - second->signal_db < INTERFERENCE_LIMIT) {
-		strongest = NULL;
+		winner = NULL;
 	} else if (strongest != NULL) {
 		winner = strongest;
 	}
@@ -1499,7 +1618,7 @@ radio_get_bearing(radio_t *radio)
 {
 	double brg, error;
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_SIGNAL);
+	    NOISE_FLOOR_AUDIO);
 	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	enum { MAX_ERROR = 3 };
 
@@ -1519,7 +1638,7 @@ radio_get_radial(radio_t *radio)
 {
 	double radial, error;
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_SIGNAL);
+	    NOISE_FLOOR_AUDIO);
 	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	enum { MAX_ERROR = 3 };
 
@@ -1539,7 +1658,7 @@ radio_get_dme(radio_t *radio)
 {
 	double dist, error;
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->dmes,
-	    NOISE_FLOOR_SIGNAL);
+	    NOISE_FLOOR_AUDIO);
 	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	vect3_t pos_3d;
 	geo_pos3_t pos;
@@ -1565,7 +1684,7 @@ static double
 radio_comp_hdef_loc(radio_t *radio)
 {
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_SIGNAL);
+	    NOISE_FLOOR_AUDIO);
 	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	const double MAX_ERROR = 1.5;
 	double brg, error, hdef;
@@ -1578,7 +1697,13 @@ radio_comp_hdef_loc(radio_t *radio)
 	error = MAX_ERROR * signal_error(nav, rnav->signal_db);
 	brg = normalize_hdg(brg + error);
 
-	hdef = rel_hdg(nav->loc.brg, brg) / HDEF_LOC_DEG_PER_DOT;
+	hdef = rel_hdg(nav->loc.brg, brg);
+	/* simulate reverse sensing for the back-course */
+	if (hdef > 90)
+		hdef = 180 - hdef;
+	else if (hdef < -90)
+		hdef = -180 - hdef;
+	hdef /= HDEF_LOC_DEG_PER_DOT;
 
 	return (hdef);
 }
@@ -1650,7 +1775,7 @@ static void
 radio_vdef_update(radio_t *radio, double d_t)
 {
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->gses,
-	    NOISE_FLOOR_SIGNAL);
+	    NOISE_FLOOR_AUDIO);
 	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	double signal_db = (rnav != NULL ? rnav->signal_db : 0);
 	double brg, dist, long_dist, d_elev, angle, vdef, error, angle_eff;
@@ -1784,6 +1909,7 @@ navrad_init(navaiddb_t *db)
 	fdr_find(&drs.hsi_sel,
 	    "sim/cockpit2/radios/actuators/HSI_source_select_pilot");
 	fdr_find(&drs.ap_state, "sim/cockpit/autopilot/autopilot_state");
+	fdr_find(&drs.ap_bc, "sim/cockpit2/autopilot/backcourse_on");
 	fdr_find(&drs.hdg, "sim/flightmodel/position/psi");
 	fdr_find(&drs.hpath, "sim/flightmodel/position/hpath");
 
@@ -1932,7 +2058,7 @@ navrad_get_ID(unsigned nr, char id[8])
 
 	mutex_enter(&radio->lock);
 	rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
-	    NOISE_FLOOR_NAV_ID);
+	    NOISE_FLOOR_TEST);
 	if (rnav == NULL) {
 		mutex_exit(&radio->lock);
 		return (B_FALSE);
