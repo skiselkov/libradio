@@ -114,7 +114,7 @@ public class Test {
 				w.start();
 				workers.add(w);
 
-				while (count_alive(workers) > 1) {
+				while (count_alive(workers) > num_cpus) {
 					try {
 						Thread.sleep(100);
 					} catch (Exception e) {/* ignored */}

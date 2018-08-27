@@ -703,8 +703,10 @@ paint_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
 		return;
 
 	terr_color = *(uint32_t *)(&pixels[4 * (y * pixel_size + x)]);
+
 	signal_db = p2p_impl(freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
 	    GEO_POS3(lat, lon, sta1_elev), twr, &elev, &water);
+
 	signal_rel = iter_fract(signal_db, recv_min_gain,
 	    xmit_gain - 90, B_TRUE);
 

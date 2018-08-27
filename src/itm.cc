@@ -11,23 +11,47 @@
 
 using namespace std;
 
+/*
+ * Saso: the original code used a ton of static variables in the functions
+ * to implement cross-function-call state. That was dome, as it broke
+ * thread-safety. Instead, we use a single global state allocated on the
+ * stack of the first externally callable function.
+ */
+struct state {
+	double wls;
+	bool wlos, wscat;
+	double dmin, xae;
+	double wd1, xd1, afo, qk, aht, xht;
+	double ad, rr, etq, h0s;
+	int kdv;
+	double dexa, de, vmd, vs0, sgl, sgtm, sgtp, sgtd, tgtd,
+	    gm, gp, cv1, cv2, yv1, yv2, yv3, csm1, csm2, ysm1, ysm2,
+	    ysm3, csp1, csp2, ysp1, ysp2, ysp3, csd1, zd, cfm1, cfm2,
+	    cfm3, cfp1, cfp2, cfp3;
+	bool ws, w1;
+};
+
 static void qlrps(double fmhz, double zsys, double en0, int ipol, double eps,
     double sgm, prop_type &prop);
-static double alos(double d, prop_type &prop, propa_type &propa);
+static double alos(struct state &state, double d, prop_type &prop,
+    propa_type &propa);
 static void qlra(int kst[], int klimx, int mdvarx, prop_type &prop,
     propv_type &propv);
-static double ascat(double d, prop_type &prop, propa_type &propa);
-static double adiff(double d, prop_type &prop, propa_type &propa);
-static void lrprop(double d, prop_type &prop, propa_type &propa);
-static double avar(double zzt, double zzl, double zzc, prop_type &prop,
-    propv_type &propv);
+static double ascat(struct state &state, double d, prop_type &prop,
+    propa_type &propa);
+static double adiff(struct state &state, double d, prop_type &prop,
+    propa_type &propa);
+static void lrprop(struct state &state, double d, prop_type &prop,
+    propa_type &propa);
+static double avar(struct state &state, double zzt, double zzl, double zzc,
+    prop_type &prop, propv_type &propv);
 static void hzns(double pfl[], prop_type &prop);
 static void z1sq1(double z[], const double &x1, const double &x2,
                              double &z0, double &zn);
 static double qtile(const int &nn, double a[], const int &ir);
 static double d1thx(double pfl[], const double &x1, const double &x2);
-static void qlrpfl(double pfl[], int klimx, int mdvarx, prop_type &prop,
-    propa_type &propa, propv_type &propv);
+static void qlrpfl(struct state &state, double pfl[], int klimx, int mdvarx,
+    prop_type &prop, propa_type &propa, propv_type &propv);
 
 static void qlrps(double fmhz, double zsys, double en0,
       int ipol, double eps, double sgm, prop_type &prop) {
@@ -47,14 +71,14 @@ static void qlrps(double fmhz, double zsys, double en0,
   prop.zgndimag = prop_zgnd.imag();
 }
 
-static double alos(double d, prop_type &prop, propa_type &propa) {
+static double alos(struct state &state, double d, prop_type &prop,
+    propa_type &propa) {
   complex<double> prop_zgnd(prop.zgndreal, prop.zgndimag);
-  static double wls;
   complex<double> r;
   double s, sps, q;
   double alosv;
   if (d == 0.0) {
-    wls = 0.021 / (0.021 + prop.wn * prop.dh / mymax(10e3, propa.dlsa));
+    state.wls = 0.021 / (0.021 + prop.wn * prop.dh / mymax(10e3, propa.dlsa));
     alosv = 0.0;
   }
   else {
@@ -71,7 +95,7 @@ static double alos(double d, prop_type &prop, propa_type &propa) {
     if (q > 1.57)
       q = 3.14 - 2.4649 / q;
     alosv = (-4.343 * log(abq_alos(complex<double>(cos(q), -sin(q)) + r)) - alosv) *
-            wls + alosv;
+            state.wls + alosv;
   }
   return alosv;
 }
@@ -108,11 +132,9 @@ static void qlra(int kst[], int klimx, int mdvarx,
   }
 }
 
-static void lrprop(double d,
+static void lrprop(struct state &state, double d,
        prop_type &prop, propa_type &propa)  // PaulM_lrprop
 {
-  static bool wlos, wscat;
-  static double dmin, xae;
   complex<double> prop_zgnd(prop.zgndreal, prop.zgndimag);
   double a0, a1, a2, a3, a4, a5, a6;
   double d0, d1, d2, d3, d4, d5, d6;
@@ -126,8 +148,8 @@ static void lrprop(double d,
     propa.dlsa = propa.dls[0] + propa.dls[1];
     propa.dla = prop.dl[0] + prop.dl[1];
     propa.tha = mymax(prop.the[0] + prop.the[1], -propa.dla * prop.gme);
-    wlos = false;
-    wscat = false;
+    state.wlos = false;
+    state.wscat = false;
     if (prop.wn < 0.838 || prop.wn > 210.0) {
       prop.kwx = mymax(prop.kwx, 1);
     }
@@ -150,13 +172,13 @@ static void lrprop(double d,
       if (prop.hg[j] < 0.5 || prop.hg[j] > 300000.0) {
         prop.kwx = 4;
       }
-    dmin = abs(prop.he[0] - prop.he[1]) / 200e-3;
-    q = adiff(0.0, prop, propa);
-    xae = pow(prop.wn * pow(prop.gme, 2), -THIRD);
-    d3 = mymax(propa.dlsa, 1.3787 * xae + propa.dla);
-    d4 = d3 + 2.7574 * xae;
-    a3 = adiff(d3, prop, propa);
-    a4 = adiff(d4, prop, propa);
+    state.dmin = abs(prop.he[0] - prop.he[1]) / 200e-3;
+    q = adiff(state, 0.0, prop, propa);
+    state.xae = pow(prop.wn * pow(prop.gme, 2), -THIRD);
+    d3 = mymax(propa.dlsa, 1.3787 * state.xae + propa.dla);
+    d4 = d3 + 2.7574 * state.xae;
+    a3 = adiff(state, d3, prop, propa);
+    a4 = adiff(state, d4, prop, propa);
     propa.emd = (a4 - a3) / (d4 - d3);
     propa.aed = a3 - propa.emd * d3;
   }
@@ -168,7 +190,7 @@ static void lrprop(double d,
     if (prop.dist > 1000e3) {
       prop.kwx = mymax(prop.kwx, 1);
     }
-    if (prop.dist < dmin) {
+    if (prop.dist < state.dmin) {
       prop.kwx = mymax(prop.kwx, 3);
     }
     if (prop.dist < 1e3 || prop.dist > 2000e3) {
@@ -176,8 +198,8 @@ static void lrprop(double d,
     }
   }
   if (prop.dist < propa.dlsa) {
-    if (!wlos) {
-      q = alos(0.0, prop, propa);
+    if (!state.wlos) {
+      q = alos(state, 0.0, prop, propa);
       d2 = propa.dlsa;
       a2 = propa.aed + d2 * propa.emd;
       d0 = 1.908 * prop.wn * prop.he[0] * prop.he[1];
@@ -187,10 +209,10 @@ static void lrprop(double d,
       }
       else
         d1 = mymax(-propa.aed / propa.emd, 0.25 * propa.dla);
-      a1 = alos(d1, prop, propa);
+      a1 = alos(state, d1, prop, propa);
       wq = false;
       if (d0 < d1) {
-        a0 = alos(d0, prop, propa);
+        a0 = alos(state, d0, prop, propa);
         q = log(d2 / d0);
         propa.ak2 = mymax(0.0, ((d2 - d0) * (a1 - a0) - (d1 - d0) * (a2 - a0)) /
                                ((d2 - d0) * log(d1 / d0) - (d1 - d0) * q));
@@ -210,22 +232,22 @@ static void lrprop(double d,
         if (propa.ak1 == 0.0) propa.ak1 = propa.emd;
       }
       propa.ael = a2 - propa.ak1 * d2 - propa.ak2 * log(d2);
-      wlos = true;
+      state.wlos = true;
     }
     if (prop.dist > 0.0)
       prop.aref = propa.ael + propa.ak1 * prop.dist +
                   propa.ak2 * log(prop.dist);
   }
   if (prop.dist <= 0.0 || prop.dist >= propa.dlsa) {
-    if (!wscat) {
-      q = ascat(0.0, prop, propa);
+    if (!state.wscat) {
+      q = ascat(state, 0.0, prop, propa);
       d5 = propa.dla + 200e3;
       d6 = d5 + 200e3;
-      a6 = ascat(d6, prop, propa);
-      a5 = ascat(d5, prop, propa);
+      a6 = ascat(state, d6, prop, propa);
+      a5 = ascat(state, d5, prop, propa);
       if (a5 < 1000.0) {
         propa.ems = (a6 - a5) / 200e3;
-        propa.dx = mymax(propa.dlsa, mymax(propa.dla + 0.3 * xae *
+        propa.dx = mymax(propa.dlsa, mymax(propa.dla + 0.3 * state.xae *
                                                        log(47.7 * prop.wn), (a5 - propa.aed - propa.ems * d5) /
                                                                             (propa.emd - propa.ems)));
         propa.aes = (propa.emd - propa.ems) * propa.dx + propa.aed;
@@ -235,7 +257,7 @@ static void lrprop(double d,
         propa.aes = propa.aed;
         propa.dx = 10.e6;
       }
-      wscat = true;
+      state.wscat = true;
     }
     if (prop.dist > propa.dx)
       prop.aref = propa.aes + propa.ems * prop.dist;
@@ -245,31 +267,31 @@ static void lrprop(double d,
   prop.aref = mymax(prop.aref, 0.0);
 }
 
-static double adiff(double d, prop_type &prop, propa_type &propa) {
+static double adiff(struct state &state, double d, prop_type &prop,
+    propa_type &propa) {
   std::complex<double> prop_zgnd(prop.zgndreal, prop.zgndimag);
-  static double wd1, xd1, afo, qk, aht, xht;
   double a, q, pk, ds, th, wa, ar, wd, adiffv;
   if (d == 0) {
     q = prop.hg[0] * prop.hg[1];
-    qk = prop.he[0] * prop.he[1] - q;
+    state.qk = prop.he[0] * prop.he[1] - q;
     if (prop.mdp < 0.0)
       q += 10.0;
-    wd1 = sqrt(1.0 + qk / q);
-    xd1 = propa.dla + propa.tha / prop.gme;
+    state.wd1 = sqrt(1.0 + state.qk / q);
+    state.xd1 = propa.dla + propa.tha / prop.gme;
     q = (1.0 - 0.8 * exp(-propa.dlsa / 50e3)) * prop.dh;
     q *= 0.78 * exp(-pow(q / 16.0, 0.25));
-    afo = mymin(15.0, 2.171 * log(1.0 + 4.77e-4 * prop.hg[0] * prop.hg[1] *
+    state.afo = mymin(15.0, 2.171 * log(1.0 + 4.77e-4 * prop.hg[0] * prop.hg[1] *
                                         prop.wn * q));
-    qk = 1.0 / abs(prop_zgnd);
-    aht = 20.0;
-    xht = 0.0;
+    state.qk = 1.0 / abs(prop_zgnd);
+    state.aht = 20.0;
+    state.xht = 0.0;
     for (int j = 0; j < 2; ++j) {
       a = 0.5 * pow(prop.dl[j], 2.0) / prop.he[j];
       wa = pow(a * prop.wn, THIRD);
-      pk = qk / wa;
+      pk = state.qk / wa;
       q = (1.607 - pk) * 151.0 * wa * prop.dl[j] / a;
-      xht += q;
-      aht += fht(q, pk);
+      state.xht += q;
+      state.aht += fht(q, pk);
     }
     adiffv = 0.0;
   }
@@ -280,35 +302,35 @@ static double adiff(double d, prop_type &prop, propa_type &propa) {
     adiffv = aknfe(q * prop.dl[0] / (ds + prop.dl[0])) + aknfe(q * prop.dl[1] / (ds + prop.dl[1]));
     a = ds / th;
     wa = pow(a * prop.wn, THIRD);
-    pk = qk / wa;
-    q = (1.607 - pk) * 151.0 * wa * th + xht;
-    ar = 0.05751 * q - 4.343 * log(q) - aht;
-    q = (wd1 + xd1 / d) * mymin(((1.0 - 0.8 * exp(-d / 50e3)) * prop.dh * prop.wn), 6283.2);
+    pk = state.qk / wa;
+    q = (1.607 - pk) * 151.0 * wa * th + state.xht;
+    ar = 0.05751 * q - 4.343 * log(q) - state.aht;
+    q = (state.wd1 + state.xd1 / d) * mymin(((1.0 - 0.8 * exp(-d / 50e3)) * prop.dh * prop.wn), 6283.2);
     wd = 25.1 / (25.1 + sqrt(q));
-    adiffv = ar * wd + (1.0 - wd) * adiffv + afo;
+    adiffv = ar * wd + (1.0 - wd) * adiffv + state.afo;
   }
   return adiffv;
 }
 
-static double ascat(double d, prop_type &prop, propa_type &propa) {
+static double ascat(struct state &state, double d, prop_type &prop,
+    propa_type &propa) {
   std::complex<double> prop_zgnd(prop.zgndreal, prop.zgndimag);
-  static double ad, rr, etq, h0s;
   double h0, r1, r2, z0, ss, et, ett, th, q;
   double ascatv;
   if (d == 0.0) {
-    ad = prop.dl[0] - prop.dl[1];
-    rr = prop.he[1] / prop.he[0];
-    if (ad < 0.0) {
-      ad = -ad;
-      rr = 1.0 / rr;
+    state.ad = prop.dl[0] - prop.dl[1];
+    state.rr = prop.he[1] / prop.he[0];
+    if (state.ad < 0.0) {
+      state.ad = -state.ad;
+      state.rr = 1.0 / state.rr;
     }
-    etq = (5.67e-6 * prop.ens - 2.32e-3) * prop.ens + 0.031;
-    h0s = -15.0;
+    state.etq = (5.67e-6 * prop.ens - 2.32e-3) * prop.ens + 0.031;
+    state.h0s = -15.0;
     ascatv = 0.0;
   }
   else {
-    if (h0s > 15.0)
-      h0 = h0s;
+    if (state.h0s > 15.0)
+      h0 = state.h0s;
     else {
       th = prop.the[0] + prop.the[1] + d * prop.gme;
       r2 = 2.0 * prop.wn * th;
@@ -316,12 +338,12 @@ static double ascat(double d, prop_type &prop, propa_type &propa) {
       r2 *= prop.he[1];
       if (r1 < 0.2 && r2 < 0.2)
         return 1001.0;  // <==== early return
-      ss = (d - ad) / (d + ad);
-      q = rr / ss;
+      ss = (d - state.ad) / (d + state.ad);
+      q = state.rr / ss;
       ss = mymax(0.1, ss);
       q = mymin(mymax(0.1, q), 10.0);
-      z0 = (d - ad) * (d + ad) * th * 0.25 / d;
-      et = (etq * exp(-pow(mymin(1.7, z0 / 8.0e3), 6.0)) + 1.0) * z0 / 1.7556e3;
+      z0 = (d - state.ad) * (d + state.ad) * th * 0.25 / d;
+      et = (state.etq * exp(-pow(mymin(1.7, z0 / 8.0e3), 6.0)) + 1.0) * z0 / 1.7556e3;
       ett = mymax(et, 1.0);
       h0 = (h0f(r1, ett) + h0f(r2, ett)) * 0.5;
       h0 += mymin(h0, (1.38 - log(ett)) * log(ss) * log(q) * 0.49);
@@ -329,10 +351,10 @@ static double ascat(double d, prop_type &prop, propa_type &propa) {
       if (et < 1.0)
         h0 = et * h0 + (1.0 - et) * 4.343 * log(pow((1.0 + 1.4142 / r1) *
                                                     (1.0 + 1.4142 / r2), 2.0) * (r1 + r2) / (r1 + r2 + 2.8284));
-      if (h0 > 15.0 && h0s >= 0.0)
-        h0 = h0s;
+      if (h0 > 15.0 && state.h0s >= 0.0)
+        h0 = state.h0s;
     }
-    h0s = h0;
+    state.h0s = h0;
     th = propa.tha + d * prop.gme;
     ascatv = ahd(th * d) + 4.343 * log(47.7 * prop.wn * pow(th, 4.0)) - 0.1 *
                                                                         (prop.ens - 301.0) * exp(-th * d / 40e3) + h0;
@@ -340,13 +362,8 @@ static double ascat(double d, prop_type &prop, propa_type &propa) {
   return ascatv;
 }
 
-static double avar(double zzt, double zzl, double zzc,
+static double avar(struct state &state, double zzt, double zzl, double zzc,
      prop_type &prop, propv_type &propv) {
-  static int kdv;
-  static double dexa, de, vmd, vs0, sgl, sgtm, sgtp, sgtd, tgtd,
-      gm, gp, cv1, cv2, yv1, yv2, yv3, csm1, csm2, ysm1, ysm2,
-      ysm3, csp1, csp2, ysp1, ysp2, ysp3, csd1, zd, cfm1, cfm2,
-      cfm3, cfp1, cfp2, cfp3;
   double bv1[7] = {-9.67, -0.62, 1.26, -9.21, -0.62, -0.39, 3.15};
   double bv2[7] = {12.7, 9.19, 15.5, 9.05, 9.19, 2.86, 857.9};
   double xv1[7] = {144.9e3, 228.9e3, 262.6e3, 84.1e3, 228.9e3, 141.7e3, 2222.e3};
@@ -370,7 +387,6 @@ static double avar(double zzt, double zzl, double zzc,
   double bfp1[7] = {1.0, 0.93, 1.0, 0.93, 0.93, 1.0, 1.0};
   double bfp2[7] = {0.0, 0.31, 0.0, 0.19, 0.31, 0.0, 0.0};
   double bfp3[7] = {0.0, 2.00, 0.0, 1.79, 2.00, 0.0, 0.0};
-  static bool ws, w1;
   double rt = 7.8, rl = 24.0, avarv, q, vs, zt, zl, zc;
   double sgt, yr;
   int temp_klim = propv.klim - 1;
@@ -385,75 +401,75 @@ static double avar(double zzt, double zzl, double zzc,
             prop.kwx = mymax(prop.kwx, 2);
           }
         }
-        cv1 = bv1[temp_klim];
-        cv2 = bv2[temp_klim];
-        yv1 = xv1[temp_klim];
-        yv2 = xv2[temp_klim];
-        yv3 = xv3[temp_klim];
-        csm1 = bsm1[temp_klim];
-        csm2 = bsm2[temp_klim];
-        ysm1 = xsm1[temp_klim];
-        ysm2 = xsm2[temp_klim];
-        ysm3 = xsm3[temp_klim];
-        csp1 = bsp1[temp_klim];
-        csp2 = bsp2[temp_klim];
-        ysp1 = xsp1[temp_klim];
-        ysp2 = xsp2[temp_klim];
-        ysp3 = xsp3[temp_klim];
-        csd1 = bsd1[temp_klim];
-        zd = bzd1[temp_klim];
-        cfm1 = bfm1[temp_klim];
-        cfm2 = bfm2[temp_klim];
-        cfm3 = bfm3[temp_klim];
-        cfp1 = bfp1[temp_klim];
-        cfp2 = bfp2[temp_klim];
-        cfp3 = bfp3[temp_klim];
+        state.cv1 = bv1[temp_klim];
+        state.cv2 = bv2[temp_klim];
+        state.yv1 = xv1[temp_klim];
+        state.yv2 = xv2[temp_klim];
+        state.yv3 = xv3[temp_klim];
+        state.csm1 = bsm1[temp_klim];
+        state.csm2 = bsm2[temp_klim];
+        state.ysm1 = xsm1[temp_klim];
+        state.ysm2 = xsm2[temp_klim];
+        state.ysm3 = xsm3[temp_klim];
+        state.csp1 = bsp1[temp_klim];
+        state.csp2 = bsp2[temp_klim];
+        state.ysp1 = xsp1[temp_klim];
+        state.ysp2 = xsp2[temp_klim];
+        state.ysp3 = xsp3[temp_klim];
+        state.csd1 = bsd1[temp_klim];
+        state.zd = bzd1[temp_klim];
+        state.cfm1 = bfm1[temp_klim];
+        state.cfm2 = bfm2[temp_klim];
+        state.cfm3 = bfm3[temp_klim];
+        state.cfp1 = bfp1[temp_klim];
+        state.cfp2 = bfp2[temp_klim];
+        state.cfp3 = bfp3[temp_klim];
       case 4:
-        kdv = propv.mdvar;
-        ws = kdv >= 20;
-        if (ws)
-          kdv -= 20;
-        w1 = kdv >= 10;
-        if (w1)
-          kdv -= 10;
-        if (kdv < 0 || kdv > 3) {
-          kdv = 0;
+        state.kdv = propv.mdvar;
+        state.ws = state.kdv >= 20;
+        if (state.ws)
+          state.kdv -= 20;
+        state.w1 = state.kdv >= 10;
+        if (state.w1)
+          state.kdv -= 10;
+        if (state.kdv < 0 || state.kdv > 3) {
+          state.kdv = 0;
           prop.kwx = mymax(prop.kwx, 2);
         }
       case 3:
         q = log(0.133 * prop.wn);
-        gm = cfm1 + cfm2 / (pow(cfm3 * q, 2.0) + 1.0);
-        gp = cfp1 + cfp2 / (pow(cfp3 * q, 2.0) + 1.0);
+        state.gm = state.cfm1 + state.cfm2 / (pow(state.cfm3 * q, 2.0) + 1.0);
+        state.gp = state.cfp1 + state.cfp2 / (pow(state.cfp3 * q, 2.0) + 1.0);
       case 2:
-        dexa = sqrt(18e6 * prop.he[0]) + sqrt(18e6 * prop.he[1]) +
+        state.dexa = sqrt(18e6 * prop.he[0]) + sqrt(18e6 * prop.he[1]) +
                pow((575.7e12 / prop.wn), THIRD);
       case 1:
-        if (prop.dist < dexa)
-          de = 130e3 * prop.dist / dexa;
+        if (prop.dist < state.dexa)
+          state.de = 130e3 * prop.dist / state.dexa;
         else
-          de = 130e3 + prop.dist - dexa;
+          state.de = 130e3 + prop.dist - state.dexa;
     }
-    vmd = curve(cv1, cv2, yv1, yv2, yv3, de);
-    sgtm = curve(csm1, csm2, ysm1, ysm2, ysm3, de) * gm;
-    sgtp = curve(csp1, csp2, ysp1, ysp2, ysp3, de) * gp;
-    sgtd = sgtp * csd1;
-    tgtd = (sgtp - sgtd) * zd;
-    if (w1)
-      sgl = 0.0;
+    state.vmd = curve(state.cv1, state.cv2, state.yv1, state.yv2, state.yv3, state.de);
+    state.sgtm = curve(state.csm1, state.csm2, state.ysm1, state.ysm2, state.ysm3, state.de) * state.gm;
+    state.sgtp = curve(state.csp1, state.csp2, state.ysp1, state.ysp2, state.ysp3, state.de) * state.gp;
+    state.sgtd = state.sgtp * state.csd1;
+    state.tgtd = (state.sgtp - state.sgtd) * state.zd;
+    if (state.w1)
+      state.sgl = 0.0;
     else {
       q = (1.0 - 0.8 * exp(-prop.dist / 50e3)) * prop.dh * prop.wn;
-      sgl = 10.0 * q / (q + 13.0);
+      state.sgl = 10.0 * q / (q + 13.0);
     }
-    if (ws)
-      vs0 = 0.0;
+    if (state.ws)
+      state.vs0 = 0.0;
     else
-      vs0 = pow(5.0 + 3.0 * exp(-de / 100e3), 2.0);
+      state.vs0 = pow(5.0 + 3.0 * exp(-state.de / 100e3), 2.0);
     propv.lvar = 0;
   }
   zt = zzt;
   zl = zzl;
   zc = zzc;
-  switch (kdv) {
+  switch (state.kdv) {
     case 0:
       zt = zc;
       zl = zc;
@@ -468,29 +484,29 @@ static double avar(double zzt, double zzl, double zzc,
     prop.kwx = mymax(prop.kwx, 1);
   }
   if (zt < 0.0)
-    sgt = sgtm;
-  else if (zt <= zd)
-    sgt = sgtp;
+    sgt = state.sgtm;
+  else if (zt <= state.zd)
+    sgt = state.sgtp;
   else
-    sgt = sgtd + tgtd / zt;
-  vs = vs0 + pow(sgt * zt, 2.0) / (rt + zc * zc) + pow(sgl * zl, 2.0) / (rl + zc * zc);
-  if (kdv == 0) {
+    sgt = state.sgtd + state.tgtd / zt;
+  vs = state.vs0 + pow(sgt * zt, 2.0) / (rt + zc * zc) + pow(state.sgl * zl, 2.0) / (rl + zc * zc);
+  if (state.kdv == 0) {
     yr = 0.0;
-    propv.sgc = sqrt(sgt * sgt + sgl * sgl + vs);
+    propv.sgc = sqrt(sgt * sgt + state.sgl * state.sgl + vs);
   }
-  else if (kdv == 1) {
+  else if (state.kdv == 1) {
     yr = sgt * zt;
-    propv.sgc = sqrt(sgl * sgl + vs);
+    propv.sgc = sqrt(state.sgl * state.sgl + vs);
   }
-  else if (kdv == 2) {
-    yr = sqrt(sgt * sgt + sgl * sgl) * zt;
+  else if (state.kdv == 2) {
+    yr = sqrt(sgt * sgt + state.sgl * state.sgl) * zt;
     propv.sgc = sqrt(vs);
   }
   else {
-    yr = sgt * zt + sgl * zl;
+    yr = sgt * zt + state.sgl * zl;
     propv.sgc = sqrt(vs);
   }
-  avarv = prop.aref - vmd - yr - propv.sgc * zc;
+  avarv = prop.aref - state.vmd - yr - propv.sgc * zc;
   if (avarv < 0.0)
     avarv = avarv * (29.0 - avarv) / (29.0 - 10.0 * avarv);
   return avarv;
@@ -661,7 +677,7 @@ static double d1thx(double pfl[], const double &x1, const double &x2) {
   return d1thxv;
 }
 
-static void qlrpfl(double pfl[], int klimx, int mdvarx,
+static void qlrpfl(struct state &state, double pfl[], int klimx, int mdvarx,
        prop_type &prop, propa_type &propa, propv_type &propv) {
   int np, j;
   double xl[2], q, za, zb;
@@ -712,7 +728,7 @@ static void qlrpfl(double pfl[], int klimx, int mdvarx,
     propv.klim = klimx;
     propv.lvar = 5;
   }
-  lrprop(0.0, prop, propa);
+  lrprop(state, 0.0, prop, propa);
 }
 
 //********************************************************
@@ -739,7 +755,7 @@ void point_to_point(double elev[], double tht_m, double rht_m,
 //         Other-  Warning: Some parameters are out of range.
 //                          Results are probably invalid.
 {
-
+  struct state state;
   prop_type prop;
   propv_type propv;
   propa_type propa;
@@ -774,7 +790,7 @@ void point_to_point(double elev[], double tht_m, double rht_m,
   }
   propv.mdvar = 12;
   qlrps(frq_mhz, zsys, q, pol, eps_dielect, sgm_conductivity, prop);
-  qlrpfl(elev, propv.klim, propv.mdvar, prop, propa, propv);
+  qlrpfl(state, elev, propv.klim, propv.mdvar, prop, propa, propv);
   fs = 32.45 + 20.0 * log10(frq_mhz) + 20.0 * log10(prop.dist / 1000.0);
   q = prop.dist - propa.dla;
   if (int(q) < 0.0)
@@ -789,7 +805,7 @@ void point_to_point(double elev[], double tht_m, double rht_m,
     else if (prop.dist > propa.dx)
       strcat(strmode, ", Troposcatter Dominant");
   }
-  dbloss = avar(zr, 0.0, zc, prop, propv) + fs;
+  dbloss = avar(state, zr, 0.0, zc, prop, propv) + fs;
   errnum = prop.kwx;
 }
 
@@ -821,7 +837,7 @@ void point_to_pointMDH(double elev[], double tht_m, double rht_m,
 //         Other-  Warning: Some parameters are out of range.
 //                          Results are probably invalid.
 {
-
+  struct state state;
   prop_type prop;
   propv_type propv;
   propa_type propa;
@@ -859,7 +875,7 @@ void point_to_pointMDH(double elev[], double tht_m, double rht_m,
   }
   propv.mdvar = 12;
   qlrps(frq_mhz, zsys, q, pol, eps_dielect, sgm_conductivity, prop);
-  qlrpfl(elev, propv.klim, propv.mdvar, prop, propa, propv);
+  qlrpfl(state, elev, propv.klim, propv.mdvar, prop, propa, propv);
   fs = 32.45 + 20.0 * log10(frq_mhz) + 20.0 * log10(prop.dist / 1000.0);
   deltaH = prop.dh;
   q = prop.dist - propa.dla;
@@ -875,7 +891,7 @@ void point_to_pointMDH(double elev[], double tht_m, double rht_m,
     else if (prop.dist > propa.dx)
       propmode += 2; // Troposcatter Dominant
   }
-  dbloss = avar(ztime, zloc, zconf, prop, propv) + fs;      //avar(time,location,confidence)
+  dbloss = avar(state, ztime, zloc, zconf, prop, propv) + fs;      //avar(time,location,confidence)
   errnum = prop.kwx;
 }
 
@@ -899,7 +915,7 @@ void point_to_pointDH(double elev[], double tht_m, double rht_m,
 //         Other-  Warning: Some parameters are out of range.
 //                          Results are probably invalid.
 {
-
+  struct state state;
   char strmode[100];
   prop_type prop;
   propv_type propv;
@@ -935,7 +951,7 @@ void point_to_pointDH(double elev[], double tht_m, double rht_m,
   }
   propv.mdvar = 12;
   qlrps(frq_mhz, zsys, q, pol, eps_dielect, sgm_conductivity, prop);
-  qlrpfl(elev, propv.klim, propv.mdvar, prop, propa, propv);
+  qlrpfl(state, elev, propv.klim, propv.mdvar, prop, propa, propv);
   fs = 32.45 + 20.0 * log10(frq_mhz) + 20.0 * log10(prop.dist / 1000.0);
   deltaH = prop.dh;
   q = prop.dist - propa.dla;
@@ -951,7 +967,7 @@ void point_to_pointDH(double elev[], double tht_m, double rht_m,
     else if (prop.dist > propa.dx)
       strcat(strmode, ", Troposcatter Dominant");
   }
-  dbloss = avar(zr, 0.0, zc, prop, propv) + fs;      //avar(time,location,confidence)
+  dbloss = avar(state, zr, 0.0, zc, prop, propv) + fs;      //avar(time,location,confidence)
   errnum = prop.kwx;
 }
 
@@ -985,6 +1001,7 @@ void area(long ModVar, double deltaH, double tht_m, double rht_m,
   //         Other-  Warning: Some parameters are out of range.
   //                          Results are probably invalid.
   // NOTE: strmode is not used at this time.
+  struct state state;
   prop_type prop;
   propv_type propv;
   propa_type propa;
@@ -1014,9 +1031,9 @@ void area(long ModVar, double deltaH, double tht_m, double rht_m,
   qlrps(frq_mhz, 0.0, eno, ipol, eps, sgm, prop);
   qlra(kst, propv.klim, ivar, prop, propv);
   if (propv.lvar < 1) propv.lvar = 1;
-  lrprop(dist_km * 1000.0, prop, propa);
+  lrprop(state, dist_km * 1000.0, prop, propa);
   fs = 32.45 + 20.0 * log10(frq_mhz) + 20.0 * log10(prop.dist / 1000.0);
-  xlb = fs + avar(zt, zl, zc, prop, propv);
+  xlb = fs + avar(state, zt, zl, zc, prop, propv);
   dbloss = xlb;
   if (prop.kwx == 0)
     errnum = 0;
