@@ -71,6 +71,7 @@
 #define	DME_BUF_NUM_SAMPLES	4788
 
 #define	NAVRAD_LOCK_DELAY	3	/* seconds */
+#define	NAVRAD_PARKED_BRG	90	/* bearing pointer parked pos */
 
 #define	MAX_DR_VALS		8
 
@@ -796,7 +797,7 @@ ap_drs_config(double d_t)
 }
 
 static void
-ap_radio_drs_config(radio_t *radio)
+ap_radio_drs_config(radio_t *radio, double d_t)
 {
 	double hdef;
 	bool_t tofrom;
@@ -818,10 +819,15 @@ ap_radio_drs_config(radio_t *radio)
 		dr_seti(&radio->drs.fromto_copilot, 0);
 	}
 
-	if (!isnan(radio->brg))
+	if (!isnan(radio->brg)) {
 		dr_setf(&radio->drs.dir_degt, normalize_hdg(radio->brg));
-	else
-		dr_setf(&radio->drs.dir_degt, 0);
+	} else {
+		double brg = dr_getf(&radio->drs.dir_degt);
+		if (brg > 180)
+			brg -= 360;
+		FILTER_IN(brg, NAVRAD_PARKED_BRG, d_t, BRG_UPD_RATE);
+		dr_setf(&radio->drs.dir_degt, brg);
+	}
 
 	if (!isnan(radio->dme))
 		dr_setf(&radio->drs.dme_nm, MET2NM(radio->dme));
@@ -872,7 +878,7 @@ radio_floop_cb(radio_t *radio, double d_t)
 		radio_vdef_update(&navrad.radios[i], d_t);
 		radio_brg_update(&navrad.radios[i], d_t);
 		radio_dme_update(&navrad.radios[i], d_t);
-		ap_radio_drs_config(&navrad.radios[i]);
+		ap_radio_drs_config(&navrad.radios[i], d_t);
 	}
 
 	dr_seti(&drs.ovrd_dme, 1);
@@ -1839,7 +1845,7 @@ radio_brg_update(radio_t *radio, double d_t)
 		if (ABS(navrad.cur_t - radio->brg_lock_t) < NAVRAD_LOCK_DELAY)
 			return;
 		if (isnan(radio->brg))
-			radio->brg = 0;
+			radio->brg = NAVRAD_PARKED_BRG;
 		brg = normalize_hdg(brg - dr_getf(&drs.hdg));
 		if (brg > 180)
 			brg -= 360;
