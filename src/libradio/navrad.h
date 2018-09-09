@@ -48,7 +48,7 @@ bool_t navrad_is_loc(unsigned nr);
 bool_t navrad_get_ID(unsigned nr, char id[8]);
 
 int16_t *navrad_get_audio_buf(unsigned nr, double volume, bool_t is_dme,
-    size_t *num_samples);
+    bool_t squelch, size_t *num_samples);
 void navrad_free_audio_buf(int16_t *buf);
 void navrad_done_audio(unsigned nr);
 

@@ -2072,11 +2072,12 @@ navrad_get_ID(unsigned nr, char id[8])
 
 static int16_t *
 get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
-    const int16_t *tone, size_t step, size_t num_samples,
+    const int16_t *tone, size_t step, size_t num_samples, bool_t squelch,
     distort_t *distort_ctx)
 {
 	int16_t *buf = calloc(num_samples, sizeof (*buf));
 	double max_db = NOISE_LEVEL_AUDIO;
+	double tone_db = NOISE_FLOOR_NAV_ID;
 	double span, noise_level;
 
 	mutex_enter(&radio->lock);
@@ -2089,8 +2090,15 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 		 * We use the navaid into the signal estimation only when
 		 * there is a tone on the frequency.
 		 */
-		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0)
+		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
 			max_db = MAX(max_db, rnav->signal_db);
+			tone_db = MAX(tone_db, rnav->signal_db);
+		}
+	}
+
+	if (squelch && tone_db <= NOISE_FLOOR_NAV_ID) {
+		mutex_exit(&radio->lock);
+		return (buf);
 	}
 
 	span = max_db - NOISE_FLOOR_AUDIO;
@@ -2125,7 +2133,7 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 
 int16_t *
 navrad_get_audio_buf(unsigned nr, double volume, bool_t is_dme,
-    size_t *num_samples)
+    bool_t squelch, size_t *num_samples)
 {
 	radio_t *radio;
 	size_t samples = (!is_dme ? VOR_BUF_NUM_SAMPLES : DME_BUF_NUM_SAMPLES);
@@ -2145,7 +2153,7 @@ navrad_get_audio_buf(unsigned nr, double volume, bool_t is_dme,
 	distort = (!is_dme ? radio->distort_vloc : radio->distort_dme);
 
 	buf = get_audio_buf_type(radio, tree, volume, tone, step, samples,
-	    distort);
+	    squelch, distort);
 
 	*num_samples = samples;
 	return (buf);
