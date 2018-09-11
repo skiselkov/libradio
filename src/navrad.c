@@ -2314,7 +2314,8 @@ navrad_get_ID(navrad_type_t type, unsigned nr, char id[8])
 		rnav = radio_get_strongest_navaid(radio, &radio->adfs,
 		    NOISE_FLOOR_TEST);
 		break;
-	case NAVRAD_TYPE_DME:
+	default:
+		ASSERT3U(radio->type, ==, NAVRAD_TYPE_DME);
 		rnav = radio_get_strongest_navaid(radio, &radio->dmes,
 		    NOISE_FLOOR_TEST);
 		break;
@@ -2476,7 +2477,8 @@ navrad_get_audio_buf(navrad_type_t type, unsigned nr, double volume,
 	case NAVRAD_TYPE_DME:
 		tree = &radio->dmes;
 		break;
-	case NAVRAD_TYPE_ADF:
+	default:
+		ASSERT3U(type, ==, NAVRAD_TYPE_ADF);
 		tree = &radio->adfs;
 		break;
 	}
