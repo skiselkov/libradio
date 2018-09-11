@@ -70,7 +70,8 @@
 #define	VOR_BUF_NUM_SAMPLES	4800
 #define	DME_BUF_NUM_SAMPLES	4788
 
-#define	NAVRAD_LOCK_DELAY	3	/* seconds */
+#define	NAVRAD_LOCK_DELAY_VLOC	2	/* seconds */
+#define	NAVRAD_LOCK_DELAY_ADF	1	/* seconds */
 #define	NAVRAD_PARKED_BRG	90	/* bearing pointer parked pos */
 
 #define	MAX_DR_VALS		8
@@ -463,6 +464,13 @@ static void radio_dme_update(radio_t *radio, double d_t);
 static void
 comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 {
+	const vect2_t adf_dist_curve[] = {
+	    VECT2(NM2MET(0), -50),
+	    VECT2(NM2MET(20), -50),
+	    VECT2(NM2MET(120), 0),
+	    VECT2(NM2MET(130), 0),
+	    NULL_VECT2
+	};
 	const vect2_t vor_dist_curve[] = {
 	    VECT2(NM2MET(0), -20),
 	    VECT2(NM2MET(20), -20),
@@ -527,12 +535,14 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 	ASSERT(nav != NULL);
 
 	switch (nav->type) {
+	case NAVAID_NDB:
 	case NAVAID_VOR: {
 		double angle_error = 0;
+		const vect2_t *curve;
 
 		if (rnav->propmode == ITM_PROPMODE_LOS) {
 			vect2_t pos_2d = geo2fpp(GEO3_TO_GEO2(nav->pos), fpp);
-			const vect2_t angle_corr_curve[] = {
+			const vect2_t vor_angle_curve[] = {
 			    VECT2(-5, -50),
 			    VECT2(-2.5, -20),
 			    VECT2(0, -10),
@@ -545,18 +555,35 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 			    VECT2(90, -60),
 			    NULL_VECT2
 			};
+			const vect2_t adf_angle_curve[] = {
+			    VECT2(-5, -40),
+			    VECT2(-2.5, -15),
+			    VECT2(0, -5),
+			    VECT2(10, -1),
+			    VECT2(20, 0),
+			    VECT2(30, 0),
+			    VECT2(40, -3),
+			    VECT2(50, -5),
+			    VECT2(60, -20),
+			    VECT2(90, -40),
+			    NULL_VECT2
+			};
+			const vect2_t *angle_curve;
 
 			rnav->radial_degt = dir2hdg(pos_2d);
 			rnav->gnd_dist = MAX(vect2_abs(pos_2d), 1);
 			rnav->slant_angle = RAD2DEG(atan((navrad.pos.elev -
 			    nav->pos.elev) / rnav->gnd_dist));
+			angle_curve = (nav->type == NAVAID_VOR ?
+			    vor_angle_curve : adf_angle_curve);
 			angle_error = fx_lin_multi(rnav->slant_angle,
-			    angle_corr_curve, B_TRUE);
+			    angle_curve, B_TRUE);
 		}
 
-		rnav->signal_db = rnav->signal_db_omni +
-		    fx_lin_multi(nav->range, vor_dist_curve, B_TRUE) +
-		    angle_error;
+		curve = (nav->type == NAVAID_VOR ? vor_dist_curve :
+		    adf_dist_curve);
+		rnav->signal_db = rnav->signal_db_omni + angle_error +
+		    fx_lin_multi(nav->range, curve, B_TRUE);
 		break;
 	}
 	case NAVAID_DME:
@@ -896,10 +923,10 @@ ap_radio_drs_config(radio_t *radio, double d_t)
 		if (!isnan(radio->brg)) {
 			dr_setf(brg_dr, normalize_hdg(radio->brg));
 		} else {
-			double brg = dr_getf(brg_dr);
-			if (brg > 180)
-				brg -= 360;
-			FILTER_IN(brg, NAVRAD_PARKED_BRG, d_t, BRG_UPD_RATE);
+			double brg = normalize_hdg(dr_getf(brg_dr));
+			double tgt = brg + rel_hdg(brg, NAVRAD_PARKED_BRG);
+			FILTER_IN(brg, tgt, d_t, BRG_UPD_RATE);
+			brg = normalize_hdg(brg);
 			dr_setf(brg_dr, brg);
 		}
 	}
@@ -1757,7 +1784,7 @@ brg_cone_error(radio_navaid_t *rnav)
 	double freq = nav->freq / 1000000.0;
 	enum { MAX_ERROR = 20 };
 	/*
-	 * We use the current radial to see the randomizer, but amplify the
+	 * We use the current radial to seed the randomizer, but amplify the
 	 * radial value to amplify any small variations. Also use the VOR
 	 * frequency to provide a more unique randomized response for every
 	 * VOR.
@@ -1921,7 +1948,8 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 	}
 
 	if (!isnan(hdef)) {
-		if (ABS(navrad.cur_t - radio->hdef_lock_t) < NAVRAD_LOCK_DELAY)
+		if (ABS(navrad.cur_t - radio->hdef_lock_t) <
+		    NAVRAD_LOCK_DELAY_VLOC)
 			return;
 
 		if (pilot) {
@@ -1972,7 +2000,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 		return;
 	}
 
-	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY)
+	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY_VLOC)
 		return;
 
 	brg = brg2navaid(nav, &dist);
@@ -2016,14 +2044,18 @@ radio_brg_update(radio_t *radio, double d_t)
 		brg = radio_get_bearing(radio);
 
 	if (!isnan(brg)) {
-		if (ABS(navrad.cur_t - radio->brg_lock_t) < NAVRAD_LOCK_DELAY)
+		double lock_delay = (radio->type == NAVRAD_TYPE_ADF ?
+		    NAVRAD_LOCK_DELAY_ADF : NAVRAD_LOCK_DELAY_VLOC);
+		double tgt;
+
+		if (ABS(navrad.cur_t - radio->brg_lock_t) < lock_delay)
 			return;
 		if (isnan(radio->brg))
 			radio->brg = NAVRAD_PARKED_BRG;
 		brg = normalize_hdg(brg - dr_getf(&drs.hdg));
-		if (brg > 180)
-			brg -= 360;
-		FILTER_IN(radio->brg, brg, d_t, BRG_UPD_RATE);
+		tgt = radio->brg + rel_hdg(radio->brg, brg);
+		FILTER_IN(radio->brg, tgt, d_t, BRG_UPD_RATE);
+		radio->brg = normalize_hdg(radio->brg);
 	} else {
 		radio->brg = NAN;
 		radio->brg_lock_t = navrad.cur_t;
@@ -2036,7 +2068,8 @@ radio_dme_update(radio_t *radio, double d_t)
 	double dme = radio_get_dme(radio);
 
 	if (!isnan(dme)) {
-		if (ABS(navrad.cur_t - radio->dme_lock_t) < NAVRAD_LOCK_DELAY)
+		if (ABS(navrad.cur_t - radio->dme_lock_t) <
+		    NAVRAD_LOCK_DELAY_VLOC)
 			return;
 		FILTER_IN_NAN(radio->dme, dme, d_t, DME_UPD_RATE);
 	} else {
