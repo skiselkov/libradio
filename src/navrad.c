@@ -2379,7 +2379,7 @@ am_tones_generate(avl_tree_t *tree, int16_t *buf, size_t step,
 		level = (rnav->signal_db - NOISE_FLOOR_AUDIO) / span;
 		for (size_t i = 0; i < num_samples; i += step) {
 			for (size_t j = 0; j < step; j++)
-				buf[i + j] += tone[j] * POW2(level);
+				buf[i + j] += tone[j] * POW3(level);
 		}
 	}
 }
@@ -2387,7 +2387,7 @@ am_tones_generate(avl_tree_t *tree, int16_t *buf, size_t step,
 static int16_t *
 get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
     const int16_t *tone, size_t step, size_t num_samples, bool_t squelch,
-    distort_t *distort_ctx)
+    bool_t agc, distort_t *distort_ctx)
 {
 	int16_t *buf = calloc(num_samples, sizeof (*buf));
 	double max_db = NOISE_LEVEL_AUDIO;
@@ -2397,19 +2397,28 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 
 	mutex_enter(&radio->lock);
 
-	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
-	    rnav = AVL_NEXT(tree, rnav)) {
-		if (rnav->signal_db <= NOISE_FLOOR_AUDIO)
-			continue;
-		/*
-		 * We use the navaid into the signal estimation only when
-		 * there is a tone on the frequency.
-		 */
-		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
-			max_db = MAX(max_db, rnav->signal_db);
-			tone_db = MAX(tone_db, rnav->signal_db);
+	if (agc) {
+		for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
+		    rnav = AVL_NEXT(tree, rnav)) {
+			if (rnav->signal_db <= NOISE_FLOOR_AUDIO)
+				continue;
+			/*
+			 * We use the navaid into the signal estimation only
+			 * when there is a tone on the frequency.
+			 */
+			if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
+				max_db = MAX(max_db, rnav->signal_db);
+				tone_db = MAX(tone_db, rnav->signal_db);
+			}
+			max_signal_db = MAX(max_signal_db, rnav->signal_db);
 		}
-		max_signal_db = MAX(max_signal_db, rnav->signal_db);
+	} else {
+		const vect2_t vol_curve[] = {
+		    VECT2(0.0, 0),
+		    VECT2(1.0, NOISE_FLOOR_AUDIO),
+		    NULL_VECT2
+		};
+		max_signal_db = fx_lin_multi(volume, vol_curve, B_TRUE);
 	}
 
 	if (squelch && tone_db <= NOISE_FLOOR_NAV_ID) {
@@ -2455,7 +2464,7 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 
 int16_t *
 navrad_get_audio_buf(navrad_type_t type, unsigned nr, double volume,
-    bool_t squelch, size_t *num_samples)
+    bool_t squelch, bool_t agc, size_t *num_samples)
 {
 	radio_t *radio = find_radio(type, nr);
 	bool_t is_dme = (type == NAVRAD_TYPE_DME ? B_TRUE : B_FALSE);
@@ -2484,7 +2493,7 @@ navrad_get_audio_buf(navrad_type_t type, unsigned nr, double volume,
 	}
 	distort = (!is_dme ? radio->distort_vloc : radio->distort_dme);
 	buf = get_audio_buf_type(radio, tree, volume, tone, step, samples,
-	    squelch, distort);
+	    squelch, agc, distort);
 
 	*num_samples = samples;
 	return (buf);
