@@ -1460,13 +1460,18 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 {
 	double d_t;
 
-	navrad.cur_t = dr_getf(&drs.sim_time);
-	d_t = ABS(navrad.cur_t - navrad.last_t);
-
 	UNUSED(elapsed1);
 	UNUSED(elapsed2);
 	UNUSED(counter);
 	UNUSED(refcon);
+
+	/*
+	 * Reset time flow when in replay.
+	 */
+	navrad.cur_t = dr_getf(&drs.sim_time);
+	if (navrad.cur_t < navrad.last_t)
+		navrad.last_t = navrad.cur_t;
+	d_t = navrad.cur_t - navrad.last_t;
 
 	if (d_t < MIN_DELTA_T)
 		goto out;
