@@ -936,7 +936,7 @@ static void
 radio_floop_cb(radio_t *radio, double d_t)
 {
 	uint64_t new_freq;
-	fpp_t fpp = gnomo_fpp_init(GEO3_TO_GEO2(navrad.pos), 0, &wgs84,
+	fpp_t fpp = ortho_fpp_init(GEO3_TO_GEO2(navrad.pos), 0, &wgs84,
 	    B_FALSE);
 
 	switch (radio->type) {
@@ -1531,7 +1531,7 @@ worker_cb(void *userinfo)
 	pos = navrad.pos;
 	mutex_exit(&navrad.lock);
 
-	fpp = gnomo_fpp_init(GEO3_TO_GEO2(pos), 0, &wgs84, B_TRUE);
+	fpp = ortho_fpp_init(GEO3_TO_GEO2(pos), 0, &wgs84, B_TRUE);
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
 		radio_worker(&navrad.vloc_radios[i], pos, &fpp);
@@ -1771,7 +1771,7 @@ brg2navaid(navaid_t *nav, double *dist)
 	pos = GEO3_TO_GEO2(navrad.pos);
 	mutex_exit(&navrad.lock);
 
-	fpp = gnomo_fpp_init(pos, 0, &wgs84, B_FALSE);
+	fpp = ortho_fpp_init(pos, 0, &wgs84, B_FALSE);
 	v = geo2fpp(GEO3_TO_GEO2(nav->pos), &fpp);
 
 	if (dist != NULL)
