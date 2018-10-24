@@ -98,15 +98,24 @@ navaids_flush(navaiddb_t *db)
 }
 
 static void
+my_strncat(char *buf, const char *append, size_t cap)
+{
+	size_t l = strlen(buf);
+
+	if (l + 1 < cap)
+		snprintf(&buf[l], cap - l, "%s", append);
+}
+
+static void
 strcat_list(char *dest, size_t cap, char **src, size_t n)
 {
 	ASSERT(cap > 1);
 
 	if (n > 0)
-		strncat(dest, src[0], cap - 1);
+		my_strncat(dest, src[0], cap);
 	for (size_t i = 1; i < n; i++) {
-		strncat(dest, " ", cap - 1);
-		strncat(dest, src[i], cap - 1);
+		my_strncat(dest, " ", cap);
+		my_strncat(dest, src[i], cap);
 	}
 }
 
