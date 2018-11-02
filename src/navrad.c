@@ -1248,7 +1248,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	double dist = clamp(vect2_abs(v), MIN_DIST, MAX_DIST);
 	egpws_terr_probe_t probe;
 	double dbloss, water_part, water_length, dielec, conduct, water_conduct;
-	int propmode, error;
+	int propmode;
 	double water_fract = 0;
 	itm_pol_t pol;
 	double acf_hgt, nav_hgt;
@@ -1314,7 +1314,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 		mutex_exit(&profile_debug.render_lock);
 	}
 
-	error = itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
+	(void) itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
 	    acf_hgt, nav_hgt, dielec, conduct, ITM_NS_AVG, itm_freq,
 	    ITM_ENV_CONTINENTAL_TEMPERATE, pol, ITM_ACCUR_MAX, ITM_ACCUR_MAX,
 	    ITM_ACCUR_MAX, &dbloss, &propmode, NULL);
@@ -1322,9 +1322,6 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	free(probe.in_pts);
 	free(probe.out_elev);
 	free(probe.out_water);
-
-	if (nav->type != NAVAID_NDB && error > ITM_RESULT_ERANGE_MULTI)
-		return;
 
 	rnav->signal_db_tgt = ANT_BASE_GAIN - dbloss;
 	rnav->propmode = propmode;
