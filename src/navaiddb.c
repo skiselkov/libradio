@@ -512,6 +512,30 @@ navaiddb_create(const char *xpdir)
 	avl_create(&db->lon, lon_compar,
 	    sizeof (navaid_t), offsetof(navaid_t, lon_node));
 
+	/*
+	 * Since the first navaid candidate found wins here, we need to
+	 * parse the files in order of user preference.
+	 */
+
+	/*
+	 * First come the user's hand-placed navaids.
+	 */
+	path = mkpathname(xpdir, "Custom Data", "user_nav.dat", NULL);
+	if (file_exists(path, NULL))
+		parse_earth_nav(db, path);
+	lacf_free(path);
+	/*
+	 * Next come the hand-placed localizers from the scenery gateway.
+	 */
+	path = mkpathname(xpdir, "Custom Scenery", "Global Airports",
+	    "Earth nav data", "earth_nav.dat", NULL);
+	if (file_exists(path, NULL))
+		parse_earth_nav(db, path);
+	lacf_free(path);
+	/*
+	 * Next try the custom data from data providers. If those exist,
+	 * don't attempt to load the old data from X-Plane stock.
+	 */
 	path = mkpathname(xpdir, "Custom Data", "earth_nav.dat", NULL);
 	if (file_exists(path, NULL))
 		parse_default = !parse_earth_nav(db, path);
