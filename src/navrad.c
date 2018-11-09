@@ -975,7 +975,8 @@ radio_floop_cb(radio_t *radio, double d_t)
 		signal_levels_update(&radio->adfs, d_t, &fpp, NULL);
 		break;
 	case NAVRAD_TYPE_DME:
-		signal_levels_update(&radio->dmes, d_t, &fpp, NULL);
+		signal_levels_update(&radio->vlocs, d_t, &fpp, NULL);
+		signal_levels_update(&radio->dmes, d_t, &fpp, &radio->vlocs);
 		break;
 	}
 
@@ -1082,6 +1083,14 @@ radio_refresh_navaid_list(radio_t *radio, geo_pos2_t pos, uint64_t freq)
 		}
 		break;
 	case NAVRAD_TYPE_DME:
+		if (is_valid_loc_freq(freq / 1000000.0)) {
+			radio_refresh_navaid_list_type(radio, &radio->vlocs,
+			    pos, freq, NAVAID_LOC);
+		} else {
+			mutex_enter(&radio->lock);
+			flush_navaid_tree(&radio->vlocs);
+			mutex_exit(&radio->lock);
+		}
 		if (is_valid_vor_freq(freq / 1000000.0) ||
 		    is_valid_loc_freq(freq / 1000000.0)) {
 			radio_refresh_navaid_list_type(radio, &radio->dmes,
@@ -1384,6 +1393,8 @@ radio_worker(radio_t *radio, geo_pos3_t pos, fpp_t *fpp)
 		    pos, fpp);
 		break;
 	case NAVRAD_TYPE_DME:
+		radio_rnav_tree_worker(radio, freq, &radio->vlocs, &dr_slot,
+		    pos, fpp);
 		radio_rnav_tree_worker(radio, freq, &radio->dmes, &dr_slot,
 		    pos, fpp);
 		break;

@@ -128,6 +128,7 @@ typedef struct {
 	list_node_t	node;
 	avl_node_t	lat_node;
 	avl_node_t	lon_node;
+	avl_node_t	id_node;
 	avl_node_t	freq_node;
 } navaid_t;
 

@@ -38,6 +38,7 @@ struct navaiddb_s {
 	list_t		navaids;
 	avl_tree_t	lat;
 	avl_tree_t	lon;
+	avl_tree_t	by_id;
 };
 
 static inline int
@@ -68,6 +69,35 @@ common_latlon_compar(const void *a, const void *b, double pa, double pb)
 }
 
 static int
+id_compar(const void *a, const void *b)
+{
+	const navaid_t *na = a, *nb = b;
+	int res;
+
+	if (na->type < nb->type)
+		return (-1);
+	if (na->type > nb->type)
+		return (1);
+	res = strcmp(na->region, nb->region);
+	if (res < 0)
+		return (-1);
+	if (res > 0)
+		return (1);
+	res = strcmp(na->icao, nb->icao);
+	if (res < 0)
+		return (-1);
+	if (res > 0)
+		return (1);
+	res = strcmp(na->id, nb->id);
+	if (res < 0)
+		return (-1);
+	if (res > 0)
+		return (1);
+
+	return (0);
+}
+
+static int
 lat_compar(const void *a, const void *b)
 {
 	return (common_latlon_compar(a, b,
@@ -92,6 +122,9 @@ navaids_flush(navaiddb_t *db)
 		;
 	cookie = NULL;
 	while (avl_destroy_nodes(&db->lon, &cookie) != NULL)
+		;
+	cookie = NULL;
+	while (avl_destroy_nodes(&db->by_id, &cookie) != NULL)
 		;
 	while ((navaid = list_remove_head(&db->navaids)) != NULL)
 		free(navaid);
@@ -476,13 +509,23 @@ parse_earth_nav(navaiddb_t *db, const char *filename)
 		}
 
 		if (nav != NULL) {
-			avl_index_t where_lat, where_lon;
+			avl_index_t where_id, where_lat, where_lon;
 
-			if (avl_find(&db->lat, nav, &where_lat) != NULL ||
+			if (avl_find(&db->by_id, nav, &where_id) != NULL ||
+			    avl_find(&db->lat, nav, &where_lat) != NULL ||
 			    avl_find(&db->lon, nav, &where_lon) != NULL) {
+				/*
+				 * Due to airport naming and region naming
+				 * inconsistencies, we might not find the
+				 * navaid duplicated in the by-id database.
+				 * So use the positional exclusion system
+				 * as well. It's dumb, but those guys can
+				 * go fix their database entries themselves.
+				 */
 				free(nav);
 				continue;
 			}
+			avl_insert(&db->by_id, nav, where_id);
 			avl_insert(&db->lat, nav, where_lat);
 			avl_insert(&db->lon, nav, where_lon);
 			list_insert_tail(&db->navaids, nav);
@@ -511,6 +554,8 @@ navaiddb_create(const char *xpdir)
 	    sizeof (navaid_t), offsetof(navaid_t, lat_node));
 	avl_create(&db->lon, lon_compar,
 	    sizeof (navaid_t), offsetof(navaid_t, lon_node));
+	avl_create(&db->by_id, id_compar,
+	    sizeof (navaid_t), offsetof(navaid_t, id_node));
 
 	/*
 	 * Since the first navaid candidate found wins here, we need to
@@ -562,6 +607,7 @@ navaiddb_destroy(navaiddb_t *db)
 
 	avl_destroy(&db->lat);
 	avl_destroy(&db->lon);
+	avl_destroy(&db->by_id);
 	list_destroy(&db->navaids);
 }
 
