@@ -62,6 +62,8 @@ bool_t navrad_have_bearing(navrad_type_t type, unsigned nr);
 double navrad_get_radial(unsigned nr);
 double navrad_get_hdef(unsigned nr, bool_t pilot, bool_t *tofrom);
 double navrad_get_vdef(unsigned nr);
+double navrad_get_fcrs(unsigned nr);
+double navrad_get_gs(unsigned nr);
 bool_t navrad_is_loc(unsigned nr);
 
 /*

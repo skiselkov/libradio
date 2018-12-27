@@ -164,6 +164,7 @@ struct radio_s {
 	double		gs;
 	distort_t	*distort_vloc;
 	distort_t	*distort_dme;
+	double		loc_fcrs;
 	double		brg;
 	double		brg_lock_t;
 	bool_t		brg_override;
@@ -1898,8 +1899,10 @@ radio_comp_hdef_loc(radio_t *radio)
 
 	if (nav == NULL ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY) {
+		radio->loc_fcrs = NAN;
 		return (NAN);
 	}
+	radio->loc_fcrs = nav->loc.brg;
 	brg = brg2navaid(nav, NULL);
 	error = MAX_ERROR * signal_error(nav, rnav->signal_db);
 	brg = normalize_hdg(brg + error);
@@ -2284,6 +2287,24 @@ navrad_get_vdef(unsigned nr)
 	if (navrad.vloc_radios[nr].failed)
 		return (NAN);
 	return (navrad.vloc_radios[nr].vdef);
+}
+
+double
+navrad_get_fcrs(unsigned nr)
+{
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.vloc_radios[nr].failed)
+		return (NAN);
+	return (navrad.vloc_radios[nr].loc_fcrs);
+}
+
+double
+navrad_get_gs(unsigned nr)
+{
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.vloc_radios[nr].failed)
+		return (NAN);
+	return (navrad.vloc_radios[nr].gs);
 }
 
 bool_t 
