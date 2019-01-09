@@ -1518,7 +1518,6 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 	dr_seti(&drs.ovrd_adf, 1);
 
 	profile_debug_floop();
-
 out:
 	navrad.last_t = navrad.cur_t;
 
@@ -2002,6 +2001,9 @@ radio_vdef_update(radio_t *radio, double d_t)
 	    VECT2(90, -20),
 	    NULL_VECT2
 	};
+	enum { DB_ELEV_DIST = 30000, SCENERY_ELEV_DIST = 20000 };
+	enum { GS_ANT_HEIGHT = 3 };
+	double nav_elev;
 
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
 
@@ -2022,7 +2024,27 @@ radio_vdef_update(radio_t *radio, double d_t)
 	brg = brg2navaid(nav, &dist);
 	offpath = fabs(rel_hdg(brg, nav->gs.brg));
 	long_dist = dist * cos(DEG2RAD(offpath));
-	d_elev = navrad.pos.elev - nav->pos.elev;
+	if (long_dist >= DB_ELEV_DIST) {
+		nav_elev = nav->pos.elev;
+	} else {
+		double xp_elev = navaiddb_get_xp_elev(nav);
+		/*
+		 * We use terrain probing to slowly phase in simulator scenery
+		 * elevation for navaids. This is because the navaid DB and
+		 * X-Plane's scenery often do not exactly match, so we can end
+		 * up with glideslope signals not being aligned with the
+		 * vertical position of the runways they service.
+		 */
+		if (!isnan(xp_elev)) {
+			double f = iter_fract(long_dist, SCENERY_ELEV_DIST,
+			    DB_ELEV_DIST, B_TRUE);
+
+			nav_elev = wavg(xp_elev, nav->pos.elev, f);
+		} else {
+			nav_elev = nav->pos.elev;
+		}
+	}
+	d_elev = navrad.pos.elev - (nav_elev + GS_ANT_HEIGHT);
 	if (ABS(long_dist) > 0.1)
 		angle = RAD2DEG(atan(d_elev / long_dist));
 	else

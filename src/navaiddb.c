@@ -21,6 +21,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <XPLMGraphics.h>
+#include <XPLMScenery.h>
+
 #include <acfutils/log.h>
 #include <acfutils/helpers.h>
 #include <acfutils/perf.h>
@@ -166,6 +169,7 @@ parse_navaid_common(char **comps, size_t n_comps, navaid_type_t type,
 	nav->pos.lat = atof(comps[1]);
 	nav->pos.lon = atof(comps[2]);
 	nav->pos.elev = FEET2MET(atoi(comps[3]));
+	nav->xp_elev = NAN;
 	if (type == NAVAID_NDB) {
 		nav->freq = atoll(comps[4]) * 1000;
 	} else if (type == NAVAID_VOR || type == NAVAID_LOC ||
@@ -609,6 +613,34 @@ navaiddb_destroy(navaiddb_t *db)
 	avl_destroy(&db->lon);
 	avl_destroy(&db->by_id);
 	list_destroy(&db->navaids);
+}
+
+double
+navaiddb_get_xp_elev(navaid_t *nav)
+{
+	XPLMProbeInfo_t info = { .structSize = sizeof (info) };
+	XPLMProbeResult res;
+	double x, y, z;
+	XPLMProbeRef probe;
+
+	if (!isnan(nav->xp_elev))
+		return (nav->xp_elev);
+
+	probe = XPLMCreateProbe(xplm_ProbeY);
+
+	XPLMWorldToLocal(nav->pos.lat, nav->pos.lon, nav->pos.elev, &x, &y, &z);
+
+	res = XPLMProbeTerrainXYZ(probe, x, 0, z, &info);
+	if (res == xplm_ProbeHitTerrain) {
+		double lat, lon;
+
+		XPLMLocalToWorld(info.locationX, info.locationY,
+		    info.locationZ, &lat, &lon, &nav->xp_elev);
+	}
+
+	XPLMDestroyProbe(probe);
+
+	return (nav->xp_elev);
 }
 
 static inline bool_t

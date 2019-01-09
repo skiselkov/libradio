@@ -72,6 +72,7 @@ typedef struct {
 	navaid_type_t	type;
 
 	geo_pos3_t	pos;
+	double		xp_elev;
 	vect3_t		ecef;
 	uint64_t	freq;
 	double		range;
@@ -139,6 +140,8 @@ typedef struct {
 
 navaiddb_t *navaiddb_create(const char *xpdir);
 void navaiddb_destroy(navaiddb_t *db);
+
+double navaiddb_get_xp_elev(navaid_t *nav);
 
 navaid_list_t *navaiddb_query(navaiddb_t *db, geo_pos2_t center,
     double radius, const char *id, uint64_t *freq, navaid_type_t *type);
