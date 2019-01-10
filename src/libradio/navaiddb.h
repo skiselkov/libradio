@@ -134,14 +134,14 @@ typedef struct {
 } navaid_t;
 
 typedef struct {
-	navaid_t	**navaids;
+	const navaid_t	**navaids;
 	size_t		num_navaids;
 } navaid_list_t;
 
 navaiddb_t *navaiddb_create(const char *xpdir);
 void navaiddb_destroy(navaiddb_t *db);
 
-double navaiddb_get_xp_elev(navaid_t *nav);
+double navaiddb_get_xp_elev(const navaid_t *nav);
 
 navaid_list_t *navaiddb_query(navaiddb_t *db, geo_pos2_t center,
     double radius, const char *id, uint64_t *freq, navaid_type_t *type);

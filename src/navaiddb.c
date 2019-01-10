@@ -616,8 +616,14 @@ navaiddb_destroy(navaiddb_t *db)
 }
 
 double
-navaiddb_get_xp_elev(navaid_t *nav)
+navaiddb_get_xp_elev(const navaid_t *nav_const)
 {
+	/*
+	 * This is a blatant violation of the qualifier, but we are ok to do
+	 * so, as the navaid is from our database, and hence we know we can
+	 * write to it.
+	 */
+	navaid_t *nav = (navaid_t *)nav_const;
 	XPLMProbeInfo_t info = { .structSize = sizeof (info) };
 	XPLMProbeResult res;
 	double x, y, z;

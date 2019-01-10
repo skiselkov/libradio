@@ -113,7 +113,7 @@ typedef enum {
 
 typedef struct {
 	radio_t		*radio;
-	navaid_t	*navaid;
+	const navaid_t	*navaid;
 	/*
 	 * `signal_db' is the dB level of the signal used by code that
 	 * generates signal processing outputs.
@@ -429,7 +429,7 @@ static const int16_t dme_tone[DME_TONE_NUM_SAMPLES] = {
     -32767
 };
 
-static double brg2navaid(navaid_t *nav, double *dist);
+static double brg2navaid(const navaid_t *nav, double *dist);
 static double radio_get_hdef(radio_t *radio, bool_t pilot, bool_t *tofrom);
 static void radio_hdef_update(radio_t *radio, bool_t pilot, double d_t);
 static void radio_vdef_update(radio_t *radio, double d_t);
@@ -531,7 +531,7 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 	    VECT2(90, -40),
 	    NULL_VECT2
 	};
-	navaid_t *nav = rnav->navaid;
+	const navaid_t *nav = rnav->navaid;
 
 	ASSERT(nav != NULL);
 
@@ -650,7 +650,7 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 static void
 audio_buf_chunks_encode(radio_navaid_t *rnav)
 {
-	navaid_t *nav = rnav->navaid;
+	const navaid_t *nav = rnav->navaid;
 
 	memset(rnav->audio_chunks, 0, sizeof (rnav->audio_chunks));
 
@@ -690,17 +690,17 @@ audio_buf_chunks_encode(radio_navaid_t *rnav)
  * run at the same time, but we don't know which one is currently in use,
  * so we instead modify the transmission diagram to kill the back-beam.
  */
-static navaid_t *
+static const navaid_t *
 find_conflicting_navaid(avl_tree_t *tree, radio_navaid_t *rnav)
 {
-	navaid_t *nav = rnav->navaid;
+	const navaid_t *nav = rnav->navaid;
 
 	if (nav->type != NAVAID_LOC && nav->type != NAVAID_DME)
 		return (NULL);
 
 	for (radio_navaid_t *oth_rnav = avl_first(tree); oth_rnav != NULL;
 	    oth_rnav = AVL_NEXT(tree, oth_rnav)) {
-		navaid_t *oth_nav = oth_rnav->navaid;
+		const navaid_t *oth_nav = oth_rnav->navaid;
 
 		if (oth_rnav == rnav)
 			continue;
@@ -714,13 +714,13 @@ find_conflicting_navaid(avl_tree_t *tree, radio_navaid_t *rnav)
 static double
 find_paired_loc_brg(avl_tree_t *tree, radio_navaid_t *rnav)
 {
-	navaid_t *nav = rnav->navaid;
+	const navaid_t *nav = rnav->navaid;
 
 	ASSERT3U(nav->type, ==, NAVAID_DME);
 
 	for (radio_navaid_t *oth_rnav = avl_first(tree); oth_rnav != NULL;
 	    oth_rnav = AVL_NEXT(tree, oth_rnav)) {
-		navaid_t *oth_nav = oth_rnav->navaid;
+		const navaid_t *oth_nav = oth_rnav->navaid;
 
 		if (oth_nav->type == NAVAID_LOC &&
 		    strcmp(nav->id, oth_nav->id) == 0 &&
@@ -1245,7 +1245,7 @@ static void
 radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
     geo_pos3_t pos, fpp_t *fpp)
 {
-	navaid_t *nav = rnav->navaid;
+	const navaid_t *nav = rnav->navaid;
 	vect2_t v = geo2fpp(GEO3_TO_GEO2(nav->pos), fpp);
 	enum {
 	    MAX_PTS = 600,
@@ -1756,20 +1756,20 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 }
 
 static double
-signal_error(navaid_t *nav, double signal_db)
+signal_error(const navaid_t *nav, double signal_db)
 {
 	double pos_seed = crc64(&nav->pos, sizeof (nav->pos)) /
 	    (double)UINT64_MAX;
 	double time_seed = navrad.last_t / 3600.0;
-	double signal_seed = clamp(signal_db / NOISE_FLOOR_SIGNAL, 0, 1);
+	double d_sig = signal_db - NOISE_FLOOR_SIGNAL;
+	double fact = pow(10, d_sig / 10);
+	double signal_seed = 1 / fact;
 
-	signal_seed = POW4(signal_seed) * POW4(signal_seed);
-
-	return (signal_seed * sin(pos_seed + time_seed));
+	return (POW4(signal_seed) * sin(pos_seed + time_seed));
 }
 
 static double
-brg2navaid(navaid_t *nav, double *dist)
+brg2navaid(const navaid_t *nav, double *dist)
 {
 	geo_pos2_t pos;
 	fpp_t fpp;
@@ -1793,7 +1793,7 @@ brg_cone_error(radio_navaid_t *rnav)
 {
 	double f = clamp((rnav->slant_angle - 60) / 30, 0, 1);
 	double fact = POW3(f);
-	navaid_t *nav = rnav->navaid;
+	const navaid_t *nav = rnav->navaid;
 	double freq = nav->freq / 1000000.0;
 	enum { MAX_ERROR = 20 };
 	/*
@@ -1810,7 +1810,7 @@ static double
 radio_get_bearing(radio_t *radio)
 {
 	double brg, error;
-	navaid_t *nav;
+	const navaid_t *nav;
 	radio_navaid_t *rnav;
 	enum { MAX_ERROR = 3 };
 
@@ -1841,7 +1841,7 @@ radio_get_radial(radio_t *radio)
 {
 	double radial, error;
 	radio_navaid_t *rnav;
-	navaid_t *nav;
+	const navaid_t *nav;
 	enum { MAX_ERROR = 3 };
 
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
@@ -1866,7 +1866,7 @@ radio_get_dme(radio_t *radio)
 	double dist, error;
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->dmes,
 	    NOISE_FLOOR_AUDIO);
-	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
+	const navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	vect3_t pos_3d;
 	geo_pos3_t pos;
 	const double MAX_ERROR = 0.025;
@@ -1892,8 +1892,8 @@ radio_comp_hdef_loc(radio_t *radio)
 {
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    NOISE_FLOOR_AUDIO);
-	navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
-	const double MAX_ERROR = 1.5;
+	const navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
+	const double MAX_ERROR = 1.2;
 	double brg, error, hdef;
 
 	if (nav == NULL ||
@@ -1989,7 +1989,7 @@ static void
 radio_vdef_update(radio_t *radio, double d_t)
 {
 	radio_navaid_t *rnav;
-	navaid_t *nav;
+	const navaid_t *nav;
 	double signal_db, offpath;
 	double brg, dist, long_dist, d_elev, angle, vdef, error, angle_eff;
 	const double MAX_ERROR = 0.5, OFFPATH_MAX_ERROR = 4.0;
@@ -2354,7 +2354,7 @@ bool_t
 navrad_get_ID(navrad_type_t type, unsigned nr, char id[8])
 {
 	radio_t *radio = find_radio(type, nr);
-	navaid_t *nav;
+	const navaid_t *nav;
 	radio_navaid_t *rnav;
 
 	if (radio->failed)
