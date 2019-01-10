@@ -49,7 +49,8 @@
 #define	NOISE_FLOOR_SIGNAL	-70.0	/* dB */
 #define	NOISE_FLOOR_TEST	-85.0	/* dB */
 #define	NOISE_FLOOR_TOO_FAR	-100.0	/* dB */
-#define	HDEF_MAX		2.5	/* dots */
+#define	HDEF_MAX		5.0	/* dots */
+#define	HDEF_MAX_XP		2.5	/* dots */
 #define	VDEF_MAX		2.5	/* dots */
 #define	HDEF_VOR_DEG_PER_DOT	2.0	/* degrees per dot */
 #define	HDEF_LOC_DEG_PER_DOT	1.0	/* degrees per dot */
@@ -849,7 +850,8 @@ ap_radio_drs_config_vloc(radio_t *radio)
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
 
 	dr_seti(&radio->drs.vloc.ovrd_nav_needles, 1);
-	hdef = radio_get_hdef(radio, B_TRUE, &tofrom);
+	hdef = clamp(radio_get_hdef(radio, B_TRUE, &tofrom), -HDEF_MAX_XP,
+	    HDEF_MAX_XP);
 	if (!isnan(hdef)) {
 		dr_setf(&radio->drs.vloc.hdef_pilot, hdef);
 		dr_seti(&radio->drs.vloc.fromto_pilot, 1 + tofrom);
@@ -857,7 +859,8 @@ ap_radio_drs_config_vloc(radio_t *radio)
 		dr_seti(&radio->drs.vloc.fromto_pilot, 0);
 	}
 
-	hdef = radio_get_hdef(radio, B_FALSE, &tofrom);
+	hdef = clamp(radio_get_hdef(radio, B_FALSE, &tofrom),
+	    -HDEF_MAX_XP, HDEF_MAX_XP);
 	if (!isnan(hdef)) {
 		dr_setf(&radio->drs.vloc.hdef_copilot, hdef);
 		dr_seti(&radio->drs.vloc.fromto_copilot, 1 + tofrom);
@@ -1893,7 +1896,7 @@ radio_comp_hdef_loc(radio_t *radio)
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    NOISE_FLOOR_AUDIO);
 	const navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
-	const double MAX_ERROR = 1.2;
+	const double MAX_ERROR = 0;
 	double brg, error, hdef;
 
 	if (nav == NULL ||
