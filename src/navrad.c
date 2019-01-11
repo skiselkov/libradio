@@ -543,7 +543,8 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 		const vect2_t *curve;
 
 		if (rnav->propmode == ITM_PROPMODE_LOS) {
-			vect2_t pos_2d = geo2fpp(GEO3_TO_GEO2(nav->pos), fpp);
+			geo_pos3_t nav_pos = navaid_get_pos(nav);
+			vect2_t pos_2d = geo2fpp(GEO3_TO_GEO2(nav_pos), fpp);
 			const vect2_t vor_angle_curve[] = {
 			    VECT2(-5, -50),
 			    VECT2(-2.5, -20),
@@ -575,7 +576,7 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 			rnav->radial_degt = dir2hdg(pos_2d);
 			rnav->gnd_dist = MAX(vect2_abs(pos_2d), 1);
 			rnav->slant_angle = RAD2DEG(atan((navrad.pos.elev -
-			    nav->pos.elev) / rnav->gnd_dist));
+			    nav_pos.elev) / rnav->gnd_dist));
 			angle_curve = (nav->type == NAVAID_VOR ?
 			    vor_angle_curve : adf_angle_curve);
 			angle_error = fx_lin_multi(rnav->slant_angle,
@@ -1249,7 +1250,8 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
     geo_pos3_t pos, fpp_t *fpp)
 {
 	const navaid_t *nav = rnav->navaid;
-	vect2_t v = geo2fpp(GEO3_TO_GEO2(nav->pos), fpp);
+	geo_pos3_t nav_pos = navaid_get_pos(nav);
+	vect2_t v = geo2fpp(GEO3_TO_GEO2(nav_pos), fpp);
 	enum {
 	    MAX_PTS = 600,
 	    SPACING = 250,		/* meters */
@@ -1307,7 +1309,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	 * ground (+10 meters for height).
 	 */
 	acf_hgt = MAX(pos.elev - probe.out_elev[0], 3);
-	nav_hgt = MAX(nav->pos.elev - probe.out_elev[probe.num_pts - 1],
+	nav_hgt = MAX(nav_pos.elev - probe.out_elev[probe.num_pts - 1],
 	    navaid_min_hgt(dist));
 
 	if (profile_debug_check(rnav)) {
@@ -1761,8 +1763,8 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 static double
 signal_error(const navaid_t *nav, double signal_db)
 {
-	double pos_seed = crc64(&nav->pos, sizeof (nav->pos)) /
-	    (double)UINT64_MAX;
+	geo_pos3_t pos = navaid_get_pos(nav);
+	double pos_seed = crc64(&pos, sizeof (pos)) / (double)UINT64_MAX;
 	double time_seed = navrad.last_t / 3600.0;
 	double d_sig = signal_db - NOISE_FLOOR_SIGNAL;
 	double fact = pow(10, d_sig / 10);
@@ -1775,6 +1777,7 @@ static double
 brg2navaid(const navaid_t *nav, double *dist)
 {
 	geo_pos2_t pos;
+	geo_pos3_t nav_pos = navaid_get_pos(nav);
 	fpp_t fpp;
 	vect2_t v;
 
@@ -1783,7 +1786,7 @@ brg2navaid(const navaid_t *nav, double *dist)
 	mutex_exit(&navrad.lock);
 
 	fpp = ortho_fpp_init(pos, 0, &wgs84, B_FALSE);
-	v = geo2fpp(GEO3_TO_GEO2(nav->pos), &fpp);
+	v = geo2fpp(GEO3_TO_GEO2(nav_pos), &fpp);
 
 	if (dist != NULL)
 		*dist = vect2_abs(v);
@@ -1896,7 +1899,7 @@ radio_comp_hdef_loc(radio_t *radio)
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    NOISE_FLOOR_AUDIO);
 	const navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
-	const double MAX_ERROR = 0;
+	const double MAX_ERROR = 0.5;
 	double brg, error, hdef;
 
 	if (nav == NULL ||
@@ -2028,7 +2031,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 	offpath = fabs(rel_hdg(brg, nav->gs.brg));
 	long_dist = dist * cos(DEG2RAD(offpath));
 	if (long_dist >= DB_ELEV_DIST) {
-		nav_elev = nav->pos.elev;
+		nav_elev = navaid_get_pos(nav).elev;
 	} else {
 		double xp_elev = navaiddb_get_xp_elev(nav);
 		/*
@@ -2042,9 +2045,9 @@ radio_vdef_update(radio_t *radio, double d_t)
 			double f = iter_fract(long_dist, SCENERY_ELEV_DIST,
 			    DB_ELEV_DIST, B_TRUE);
 
-			nav_elev = wavg(xp_elev, nav->pos.elev, f);
+			nav_elev = wavg(xp_elev, navaid_get_pos(nav).elev, f);
 		} else {
-			nav_elev = nav->pos.elev;
+			nav_elev = navaid_get_pos(nav).elev;
 		}
 	}
 	d_elev = navrad.pos.elev - (nav_elev + GS_ANT_HEIGHT);

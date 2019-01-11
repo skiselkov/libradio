@@ -39,6 +39,7 @@
 
 struct navaiddb_s {
 	list_t		navaids;
+	airportdb_t	*adb;
 	avl_tree_t	lat;
 	avl_tree_t	lon;
 	avl_tree_t	by_id;
@@ -547,7 +548,7 @@ errout:
 }
 
 navaiddb_t *
-navaiddb_create(const char *xpdir)
+navaiddb_create(const char *xpdir, airportdb_t *adb)
 {
 	navaiddb_t *db = calloc(1, sizeof (*db));
 	char *path;
@@ -560,6 +561,7 @@ navaiddb_create(const char *xpdir)
 	    sizeof (navaid_t), offsetof(navaid_t, lon_node));
 	avl_create(&db->by_id, id_compar,
 	    sizeof (navaid_t), offsetof(navaid_t, id_node));
+	db->adb = adb;
 
 	/*
 	 * Since the first navaid candidate found wins here, we need to
@@ -714,6 +716,28 @@ navaids_gather(navaiddb_t *db, geo_pos2_t center, const char *id,
 	return (count);
 }
 
+static void
+loc_align_with_rwy(navaiddb_t *db, navaid_t *nav)
+{
+	airport_t *arpt;
+	runway_t *rwy;
+	unsigned end;
+
+	ASSERT(db != NULL);
+	ASSERT(nav != NULL);
+	ASSERT3U(nav->type, ==, NAVAID_LOC);
+	ASSERT(!nav->loc.rwy_align_done);
+
+	arpt = airport_lookup_global(db->adb, nav->icao);
+	/* Correct the navaid bearing to the runway true heading. */
+	if (arpt != NULL &&
+	    airport_find_runway(arpt, nav->loc.rwy_id, &rwy, &end) &&
+	    fabs(rel_hdg(nav->loc.brg, rwy->ends[end].hdg)) <= 1) {
+		nav->loc.brg = rwy->ends[end].hdg;
+	}
+	nav->loc.rwy_align_done = B_TRUE;
+}
+
 navaid_list_t *
 navaiddb_query(navaiddb_t *db, geo_pos2_t center, double radius,
     const char *id, uint64_t *freq, navaid_type_t *type)
@@ -734,6 +758,18 @@ navaiddb_query(navaiddb_t *db, geo_pos2_t center, double radius,
 	list->navaids = calloc(list->num_navaids, sizeof (*list->navaids));
 	navaids_gather(db, center, id, freq, type, lat_spacing, lon_spacing,
 	    where_lat, where_lon, list);
+
+	airportdb_lock(db->adb);
+
+	for (size_t i = 0; i < list->num_navaids; i++) {
+		/* We can modify the navaid, since we own the database. */
+		navaid_t *nav = (navaid_t *)list->navaids[i];
+		if (nav->type == NAVAID_LOC && !nav->loc.rwy_align_done)
+			loc_align_with_rwy(db, nav);
+	}
+
+	unload_distant_airport_tiles(db->adb, NULL_GEO_POS2);
+	airportdb_unlock(db->adb);
 
 	return (list);
 }
@@ -796,4 +832,10 @@ navaid_act_freq(navaid_type_t type, uint64_t ref_freq)
 	default:
 		return (ref_freq);
 	}
+}
+
+geo_pos3_t
+navaid_get_pos(const navaid_t *nav)
+{
+	return (nav->pos);
 }

@@ -26,6 +26,7 @@
 #ifndef	_LIBRADIO_NAVAIDDB_H_
 #define	_LIBRADIO_NAVAIDDB_H_
 
+#include <acfutils/airportdb.h>
 #include <acfutils/avl.h>
 #include <acfutils/geom.h>
 #include <acfutils/list.h>
@@ -89,6 +90,7 @@ typedef struct {
 		struct {
 			double		brg;		/* degrees */
 			char		rwy_id[8];
+			bool_t		rwy_align_done;
 		} loc;
 		struct {
 			double		brg;		/* degrees */
@@ -138,7 +140,7 @@ typedef struct {
 	size_t		num_navaids;
 } navaid_list_t;
 
-navaiddb_t *navaiddb_create(const char *xpdir);
+navaiddb_t *navaiddb_create(const char *xpdir, airportdb_t *adb);
 void navaiddb_destroy(navaiddb_t *db);
 
 double navaiddb_get_xp_elev(const navaid_t *nav);
@@ -149,6 +151,7 @@ void navaiddb_list_free(navaid_list_t *list);
 
 const char *navaid_type2str(navaid_type_t type);
 uint64_t navaid_act_freq(navaid_type_t type, uint64_t ref_freq);
+geo_pos3_t navaid_get_pos(const navaid_t *nav);
 
 #ifdef	__cplusplus
 }
