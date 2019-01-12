@@ -733,7 +733,19 @@ loc_align_with_rwy(navaiddb_t *db, navaid_t *nav)
 	if (arpt != NULL &&
 	    airport_find_runway(arpt, nav->loc.rwy_id, &rwy, &end) &&
 	    fabs(rel_hdg(nav->loc.brg, rwy->ends[end].hdg)) <= 1) {
-		nav->loc.brg = rwy->ends[end].hdg;
+		fpp_t fpp = gnomo_fpp_init(GEO3_TO_GEO2(rwy->ends[end].thr), 0,
+		    NULL, B_TRUE);
+		vect2_t thr2thr_v, cross_v, nav_v, c;
+		geo_pos2_t p;
+
+		thr2thr_v = geo2fpp(GEO3_TO_GEO2(rwy->ends[!end].thr), &fpp);
+		nav_v = geo2fpp(GEO3_TO_GEO2(nav->pos), &fpp);
+		cross_v = vect2_norm(thr2thr_v, B_TRUE);
+		c = vect2vect_isect(cross_v, nav_v, thr2thr_v, ZERO_VECT2,
+		    B_FALSE);
+		p = fpp2geo(c, &fpp);
+		nav->loc.corr_pos = GEO_POS3(p.lat, p.lon, nav->pos.elev);
+		nav->loc.brg = dir2hdg(thr2thr_v);
 	}
 	nav->loc.rwy_align_done = B_TRUE;
 }
@@ -837,5 +849,7 @@ navaid_act_freq(navaid_type_t type, uint64_t ref_freq)
 geo_pos3_t
 navaid_get_pos(const navaid_t *nav)
 {
+	if (nav->type == NAVAID_LOC)
+		return (nav->loc.corr_pos);
 	return (nav->pos);
 }

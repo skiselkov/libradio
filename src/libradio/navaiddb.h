@@ -90,6 +90,7 @@ typedef struct {
 		struct {
 			double		brg;		/* degrees */
 			char		rwy_id[8];
+			geo_pos3_t	corr_pos;
 			bool_t		rwy_align_done;
 		} loc;
 		struct {

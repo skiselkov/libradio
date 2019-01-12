@@ -1785,7 +1785,7 @@ brg2navaid(const navaid_t *nav, double *dist)
 	pos = GEO3_TO_GEO2(navrad.pos);
 	mutex_exit(&navrad.lock);
 
-	fpp = ortho_fpp_init(pos, 0, &wgs84, B_FALSE);
+	fpp = ortho_fpp_init(pos, 0, NULL, B_FALSE);
 	v = geo2fpp(GEO3_TO_GEO2(nav_pos), &fpp);
 
 	if (dist != NULL)
