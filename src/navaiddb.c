@@ -746,6 +746,8 @@ loc_align_with_rwy(navaiddb_t *db, navaid_t *nav)
 		p = fpp2geo(c, &fpp);
 		nav->loc.corr_pos = GEO_POS3(p.lat, p.lon, nav->pos.elev);
 		nav->loc.brg = dir2hdg(thr2thr_v);
+	} else {
+		nav->loc.corr_pos = nav->pos;
 	}
 	nav->loc.rwy_align_done = B_TRUE;
 }
