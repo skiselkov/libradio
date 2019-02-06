@@ -310,7 +310,7 @@ parse_dme(char **comps, size_t n_comps, navaid_t **nav_pp)
 	}
 
 	if (nav != NULL)
-		nav->dme.bias = NM2MET(atof(comps[6]));
+		nav->dme.bias = -NM2MET(atof(comps[6]));
 	if (nav == NULL ||
 	    (!is_valid_vor_freq(HZ2MHZ(nav->freq)) &&
 	    !is_valid_loc_freq(HZ2MHZ(nav->freq)))) {
