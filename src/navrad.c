@@ -1537,7 +1537,7 @@ worker_cb(void *userinfo)
 
 	UNUSED(userinfo);
 
-	if (!navrad.opengpws->is_inited())
+	if (navrad.opengpws == NULL || !navrad.opengpws->is_inited())
 		return (B_TRUE);
 
 	mutex_enter(&navrad.lock);
@@ -2137,11 +2137,32 @@ radio_get_hdef(radio_t *radio, bool_t pilot, bool_t *tofrom)
 	return (NAN);
 }
 
-bool_t
-navrad_init(navaiddb_t *db)
+static float
+get_gpws_intf_cb(float elapsed, float d_t, int counter, void *refcon)
 {
 	XPLMPluginID opengpws;
 
+	UNUSED(elapsed);
+	UNUSED(d_t);
+	UNUSED(counter);
+	UNUSED(refcon);
+
+	opengpws = XPLMFindPluginBySignature(OPENGPWS_PLUGIN_SIG);
+	if (opengpws != XPLM_NO_PLUGIN_ID) {
+		XPLMSendMessageToPlugin(opengpws, EGPWS_GET_INTF,
+		    &navrad.opengpws);
+		VERIFY(navrad.opengpws != NULL);
+	} else {
+		logMsg("Cannot contact OpenGPWS for the terrain data. "
+		    "Is OpenGPWS installed?");
+	}
+
+	return (0);
+}
+
+bool_t
+navrad_init(navaiddb_t *db)
+{
 	ASSERT(!inited);
 	inited = B_TRUE;
 
@@ -2190,22 +2211,12 @@ navrad_init(navaiddb_t *db)
 	dr_create_i(&profile_debug.type_dr, (int *)&profile_debug.type,
 	    B_TRUE, "libradio/debug/type");
 
-	opengpws = XPLMFindPluginBySignature(OPENGPWS_PLUGIN_SIG);
-	if (opengpws == XPLM_NO_PLUGIN_ID) {
-		logMsg("Cannot contact OpenGPWS for the terrain data. "
-		    "Is OpenGPWS installed?");
-		goto errout;
-	}
-	XPLMSendMessageToPlugin(opengpws, EGPWS_GET_INTF, &navrad.opengpws);
-	VERIFY(navrad.opengpws != NULL);
+	XPLMRegisterFlightLoopCallback(get_gpws_intf_cb, -1, NULL);
 
 	worker_init(&navrad.worker, worker_cb, WORKER_INTVAL, NULL,
 	    "navrad-worker");
 
 	return (B_TRUE);
-errout:
-	navrad_fini();
-	return (B_FALSE);
 }
 
 void
@@ -2220,6 +2231,8 @@ navrad_fini(void)
 	 * the navrad worker won't try to use destroyed locks.
 	 */
 	worker_fini(&navrad.worker);
+
+	XPLMUnregisterFlightLoopCallback(get_gpws_intf_cb, NULL);
 
 	if (profile_debug.win != NULL)
 		XPLMDestroyWindow(profile_debug.win);
