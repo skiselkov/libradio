@@ -159,16 +159,18 @@ public class RadioModel
 	 */
 	public static native void paintMapMulti(double freq_mhz,
 	    boolean horiz_pol, double xmit_gain, double recv_min_gain,
-	    double sta1_elev, double sta2_lats[], double sta2_lons[],
-	    double sta2_elevs[], double deg_range, double ctr_lat,
-	    double ctr_lon, int pixel_size, String out_file);
+	    double sta1_elev, boolean sta1_agl,
+	    double sta2_lats[], double sta2_lons[], double sta2_elevs[],
+	    double deg_range, double ctr_lat, double ctr_lon,
+	    int pixel_size, String out_file);
 
 	/*
 	 * Shorthand version of paintMapMulti where only a single fixed
 	 * station is being considered. The map is centered on station 2.
 	 */
 	public static void paintMap(double freq_mhz, boolean horiz_pol,
-	    double xmit_gain, double recv_min_gain, double sta1_elev,
+	    double xmit_gain, double recv_min_gain,
+	    double sta1_elev, boolean sta1_agl,
 	    double sta2_lat, double sta2_lon, double sta2_elev,
 	    double deg_range, int pixel_size, String out_file)
 	{
@@ -177,8 +179,8 @@ public class RadioModel
 		double[] elevs = { sta2_elev };
 
 		paintMapMulti(freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
-		    sta1_elev, lats, lons, elevs, deg_range, sta2_lat,
-		    sta2_lon, pixel_size, out_file);
+		    sta1_elev, sta1_agl, lats, lons, elevs, deg_range,
+		    sta2_lat, sta2_lon, pixel_size, out_file);
 	}
 
 	/*

@@ -17,9 +17,12 @@
  */
 
 #include <errno.h>
+#include <string.h>
+
+#if	LIN
 #include <sys/types.h>
 #include <dirent.h>
-#include <string.h>
+#endif	/* LIN */
 
 #include <jni.h>
 
@@ -486,7 +489,10 @@ tile_elev_read(geo_pos2_t p, bool_t *water)
 	ASSERT3F(tile_lon_fract, >=, 0.0);
 	ASSERT3F(tile_lon_fract, <=, 1.0);
 
-	*water = tile_water_mask_read(tile, tile_lat_fract, tile_lon_fract);
+	if (water != NULL) {
+		*water = tile_water_mask_read(tile, tile_lat_fract,
+		    tile_lon_fract);
+	}
 
 	return (elev_filter_lin(tile, tile_lat_fract, tile_lon_fract));
 }
@@ -687,7 +693,8 @@ get_terr_color(double elev)
 static void
 paint_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
     double recv_min_gain, geo_pos3_t twr, geo_pos2_t ctr, double sta1_elev,
-    int x, int y, int pixel_size, double deg_range, uint8_t *pixels)
+    bool_t sta1_agl,  int x, int y, int pixel_size, double deg_range,
+    uint8_t *pixels)
 {
 	double lon = ctr.lon + ((x / (double)pixel_size) - 0.5) * deg_range;
 	double lat = ctr.lat - ((y / (double)pixel_size) - 0.5) * deg_range;
@@ -698,14 +705,21 @@ paint_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
 	uint8_t r, g, b, rem_r, rem_g, rem_b;
 	double d_lat = ABS(lat - twr.lat);
 	double d_lon = ABS(lon - twr.lon);
+	geo_pos3_t sta1_pos;
 
 	if (sqrt(POW2(d_lat) + POW2(d_lon)) > 5)
 		return;
 
 	terr_color = *(uint32_t *)(&pixels[4 * (y * pixel_size + x)]);
 
+	if (sta1_agl) {
+		sta1_pos = GEO_POS3(lat, lon,
+		    tile_elev_read(GEO_POS2(lat, lon), NULL) + sta1_elev);
+	} else {
+		sta1_pos = GEO_POS3(lat, lon, sta1_elev);
+	}
 	signal_db = p2p_impl(freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
-	    GEO_POS3(lat, lon, sta1_elev), twr, &elev, &water);
+	    sta1_pos, twr, &elev, &water);
 
 	signal_rel = iter_fract(signal_db, recv_min_gain,
 	    xmit_gain - 90, B_TRUE);
@@ -734,9 +748,10 @@ paint_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
 JNIEXPORT void JNICALL
 Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
     jboolean horiz_pol, jdouble xmit_gain, jdouble recv_min_gain,
-    jdouble sta1_elev, jdoubleArray sta2_lats, jdoubleArray sta2_lons,
-    jdoubleArray sta2_elevs, jdouble deg_range, jdouble ctr_lat,
-    jdouble ctr_lon, jint pixel_size, jstring out_file_str)
+    jdouble sta1_elev, jboolean sta1_agl,
+    jdoubleArray sta2_lats, jdoubleArray sta2_lons, jdoubleArray sta2_elevs,
+    jdouble deg_range, jdouble ctr_lat, jdouble ctr_lon, jint pixel_size,
+    jstring out_file_str)
 {
 	uint8_t *pixels;
 	const char *out_file;
@@ -833,8 +848,9 @@ Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
 			for (int x = 0; x < pixel_size; x++) {
 				paint_impl(freq_mhz, horiz_pol, xmit_gain,
 				    recv_min_gain, sta2_pos,
-				    GEO_POS2(ctr_lat, ctr_lon), sta1_elev, x, y,
-				    pixel_size, deg_range, pixels);
+				    GEO_POS2(ctr_lat, ctr_lon), sta1_elev,
+				    sta1_agl, x, y, pixel_size, deg_range,
+				    pixels);
 			}
 		}
 	}
