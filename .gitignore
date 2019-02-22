@@ -1,10 +1,12 @@
+*.class
+
 src/itm.o
 src/itm_c.o
-src/java/RadioModel.class
-src/java/RadioModel.h
+src/java/com_vspro_util_RadioModel.h
 src/java/RadioModel.o
-src/java/Test.class
-src/java/TestMulti.class
 src/java/data
+src/java/lib/RadioModel.dll
+src/java/lib/RadioModel.lib
 src/java/lib/libRadioModel.so
 src/java/RadioModel.zip
+src/java/doc
