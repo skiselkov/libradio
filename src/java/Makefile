@@ -87,9 +87,11 @@ all : $(CLASSES) $(RADIOLIB)
 zip : RadioModel.zip
 
 RadioModel.zip : $(CLASSES) $(RADIOLIB) data
-	rm -f RadioModel.zip
+	rm -rf RadioModel.zip doc
+	( mkdir doc && cd doc && \
+	    javadoc $(addprefix ../,$(patsubst %.class,%.java,$(CLASSES))) )
 	zip -r RadioModel.zip $(CLASSES) $(patsubst %.class,%.java,$(CLASSES)) \
-	    $(wildcard lib/*RadioModel.*) data
+	    $(wildcard lib/*RadioModel.*) data doc
 
 lib/libRadioModel.so : $(OBJS)
 	mkdir -p lib

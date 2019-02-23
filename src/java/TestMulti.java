@@ -2,6 +2,8 @@ import java.util.Scanner;
 import java.util.regex.*;
 import java.util.*;
 
+import com.vspro.util.RadioModel;
+
 public class TestMulti {
     static double ft2m(double ft)
     {

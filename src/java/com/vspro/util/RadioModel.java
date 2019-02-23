@@ -20,28 +20,29 @@ package com.vspro.util;
 
 public class RadioModel
 {
-	/*
+	/**
 	 * Initializes the radio model and loads the terrain data. This must
 	 * be called before sending any queries to the radio model. Once
 	 * initialized, the library can be called from any number of parallel
-	 * threads. No locking is required, as once the initialized, the
-	 * radio model is immutable (until it is de-initialized using
-	 * RadioModel.fini()).
+	 * threads. No locking is required, as once initialized, the radio
+	 * model is immutable (until de-initialized using RadioModel.fini()).
 	 *
 	 * @param data_dir Path to a directory containing Earth orbit texture
-	 *	normal data extracted from X-Plane. This must be assembled as
-	 *	follows:
-	 *	1) at the top level of the data directory are individual
-	 *	   normal map files, name for example: "+30-110-nrm.png".
-	 *	   The normal maps can use any internal resolution, not just
-	 *	   the stock 1024x1024 shipped in X-Plane.
-	 *	2) For each normal map, there can be an optional subdirectory
-	 *	   containing water mask shape files. The subdirectory needs
-	 *	   to have the same name as the normal map (e.g. "+30-110").
-	 *	3) Inside of each water mask directory are 1-degree-sized
-	 *	   water mask shape files (also extracted from X-Plane).
-	 *	   One tile will typically consist of two files named e.g.
-	 *	   "+34-102.shx" and "+34-102.shp".
+	 * normal data extracted from X-Plane. This must be assembled as
+	 * follows:
+	 * <ol>
+	 * <li> at the top level of the data directory are individual
+	 *	normal map files, name for example: "+30-110-nrm.png".
+	 *	The normal maps can use any internal resolution, not just
+	 *	the stock 1024x1024 shipped in X-Plane.
+	 * <li> For each normal map, there can be an optional subdirectory
+	 *	containing water mask shape files. The subdirectory needs
+	 *	to have the same name as the normal map (e.g. "+30-110").
+	 * <li> Inside of each water mask directory are 1-degree-sized
+	 *	water mask shape files (also extracted from X-Plane).
+	 *	One tile will typically consist of two files named e.g.
+	 *	"+34-102.shx" and "+34-102.shp".
+	 * </ol>
 	 * @param spacing When constructing a terrain relief between two
 	 *	radio endpoints, libradio will space the points `spacing'
 	 *	meters apart. The denser the points, the more accurate the
@@ -64,7 +65,7 @@ public class RadioModel
 	public static native void init(String data_dir, int spacing,
 	    int max_pts, int max_dist);
 
-	/*
+	/**
 	 * When you are done with the radio model and wish to unload it
 	 * from memory, you must call this method. Please note that the
 	 * RadioModel is a C library, so the Java garbage collector doesn't
@@ -72,17 +73,23 @@ public class RadioModel
 	 * explicitly dispose of it when you don't need it anymore.
 	 * It is safe to call this method multiple times, the radio model
 	 * will automatically be deinitialized only once.
+	 *
+	 * <p> Please note that if you plan to call the library multiple
+	 * times (e.g. in a long-running service), <b>DO NOT</b> call fini()
+	 * after every terrain probe. The init() method does a lot of heavy
+	 * bootstrapping, so keep the initialized radio model around until
+	 * you are sure you don't need it anymore.
 	 */
 	public static native void fini();
 
-	/*
-	 * Memory usage estimator for diagnostic purposes. Returns the
-	 * approximate amount of memory (in bytes) used to store the
-	 * height maps and water masks.
+	/**
+	 * Memory usage estimator for diagnostic purposes.
+	 * @return Approximate amount of memory (in bytes) used to store
+	 *	the height maps and water masks.
 	 */
 	public static native int countBytes();
 
-	/*
+	/**
 	 * Main `worker' method of the model. You call this function when
 	 * you want to compute the radio reception level between two points
 	 * in space. All positions are specified as geodesic coordinates
@@ -91,7 +98,7 @@ public class RadioModel
 	 * transmitter/receiver roles between the two stations (the laws of
 	 * physics are the same no matter which direction you are traveling!).
 	 *
-	 * @param freq_mhz The frequency (in MHz!) of the radio signal
+	 * @param freq_mhz The frequency (in MHz) of the radio signal
 	 *	being propagated.
 	 * @param horiz_pol Flag indicating whether the signal is
 	 *	horizontally or vertically polarized. Most signals used
@@ -107,12 +114,12 @@ public class RadioModel
 	 *	These range typically from -70 to -100. These values are
 	 *	very transmission method dependent and so need to be
 	 *	determined experimentally.
-	 * @param sta1_lat Station 1 position latitude.
-	 * @param sta1_lon Station 1 position longitude.
-	 * @param sta1_elev Station 1 absolute elevation.
-	 * @param sta2_lat Station 2 position latitude.
-	 * @param sta2_lon Station 2 position longitude.
-	 * @param sta2_elev Station 2 absolute elevation.
+	 * @param sta1_lat Station 1 position latitude in degrees.
+	 * @param sta1_lon Station 1 position longitude in degrees.
+	 * @param sta1_elev Station 1 absolute elevation in meters.
+	 * @param sta2_lat Station 2 position latitude in degrees.
+	 * @param sta2_lon Station 2 position longitude in degrees.
+	 * @param sta2_elev Station 2 absolute elevation in meters.
 	 *
 	 * @return Signal level (in dB) at the receiver side (whichever
 	 *	of the two stations that may be). This will typically be
@@ -126,7 +133,7 @@ public class RadioModel
 	    double sta1_lat, double sta1_lon, double sta1_elev,
 	    double sta2_lat, double sta2_lon, double sta2_elev);
 
-	/*
+	/**
 	 * Paints a receive signal level intensity map for a receiver moving
 	 * among potentially multiple transmitters. This is useful for
 	 * estimating dead spots in an area of interest. Most of the arguments
@@ -134,10 +141,10 @@ public class RadioModel
 	 * that here the point-to-point model is run for every pixel of the
 	 * rendered image against each of the sets of fixed stations.
 	 *
-	 * @param freq_mhz The frequency (in MHz!) of the radio signal
+	 * @param freq_mhz The frequency (in MHz) of the radio signal
 	 *	being propagated.
 	 * @param horiz_pol Flag indicating whether the signal is
-	 *	horizontally or vertically polarized.
+	 *	horizontally (true) or vertically (false) polarized.
 	 * @param xmit_gain A base transmitter gain value indicating
 	 *	approximate signal strength in dB.
 	 * @param recv_min_gain A minimum dB gain value before the model
@@ -145,6 +152,9 @@ public class RadioModel
 	 * @param sta1_elev Absolute elevation of the "moving" station in
 	 *	meters. The method automatically changes the station's
 	 *	latitude x longitude to pass every part of the rendered image.
+	 * @param sta1_agl A flag indication whether sta1_elev is to be
+	 *	interpreted as an absolute elevation value, or as a relative
+	 *	above-ground-level value.
 	 * @param sta2_lats An array of latitudes for the "fixed" stations.
 	 * @param sta2_lons An array of longitudes for the "fixed" stations.
 	 * @param sta2_elevs An array of elevations for the "fixed" stations.
@@ -154,7 +164,7 @@ public class RadioModel
 	 * @param ctr_lat Latitude of the centerpoint of the rendered map.
 	 * @param ctr_lon Longitude of the centerpoint of the rendered map.
 	 * @param pixel_size Pixel resolution of the rendered map. Please
-	 *	note that settings this very can significantly slow down
+	 *	note that settings this very large can significantly slow down
 	 *	map painting, so it's not recommended to use map sizes much
 	 *	above 1024 or 2048.
 	 * @param out_file Output PNG image file name.
@@ -166,7 +176,7 @@ public class RadioModel
 	    double deg_range, double ctr_lat, double ctr_lon,
 	    int pixel_size, String out_file);
 
-	/*
+	/**
 	 * Shorthand version of paintMapMulti where only a single fixed
 	 * station is being considered. The map is centered on station 2.
 	 */
@@ -185,12 +195,12 @@ public class RadioModel
 		    sta2_lat, sta2_lon, pixel_size, out_file);
 	}
 
-	/*
+	/**
 	 * Elevation model probing function. Useful for comparing terrain
 	 * model accuracy with expected station position data.
 	 *
-	 * @param lat Latitude of the probe point.
-	 * @param lon Longitude of the probe point.
+	 * @param lat Latitude (in degrees) of the probe point.
+	 * @param lon Longitude (in degrees) of the probe point.
 	 *
 	 * @return Local elevation at the probe point in meters AMSL.
 	 */
