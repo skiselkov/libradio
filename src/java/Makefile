@@ -15,7 +15,7 @@
 #
 
 CLASSES = \
-    RadioModel.class
+    com/vspro/util/RadioModel.class
 
 OBJS = \
     RadioModel.o \
@@ -103,8 +103,9 @@ lib/RadioModel.dll : $(OBJS)
 
 %.class : %.java
 	javac $^
-	javah $(basename $^)
-	sed -i 's/JNIEXPORT/LIBEXPORT JNIEXPORT/g' $(patsubst %.java,%.h,$^)
+	javah $(subst /,.,$(basename $^))
+	sed -i 's/JNIEXPORT/LIBEXPORT JNIEXPORT/g' \
+	    $(subst /,_,$(patsubst %.java,%.h,$^))
 
 clean :
 	rm -f $(OBJS) $(CLASSES) $(wildcard lib/*RadioModel.*) RadioModel.zip

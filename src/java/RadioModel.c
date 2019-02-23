@@ -37,7 +37,7 @@
 #include <acfutils/time.h>
 
 #include "itm_c.h"
-#include "RadioModel.h"
+#include "com_vspro_util_RadioModel.h"
 
 #define	NUM_LAT	18
 #define	NUM_LON	36
@@ -254,8 +254,8 @@ out:
 }
 
 JNIEXPORT void JNICALL
-Java_RadioModel_init(JNIEnv *env, jclass cls, jstring tile_path_str,
-    jint spacing, jint max_pts, jint max_dist)
+Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
+    jstring tile_path_str, jint spacing, jint max_pts, jint max_dist)
 {
 	enum { MIN_SPACING = 10, MAX_SPACING = 100000, DFL_SPACING = 500,
 	    DFL_MAX_PTS = 500, DFL_MAX_DIST = 600000, MIN_MAX_DIST = 2000,
@@ -388,7 +388,7 @@ out:
 }
 
 JNIEXPORT void JNICALL
-Java_RadioModel_fini(JNIEnv *env, jclass cls)
+Java_com_vspro_util_RadioModel_fini(JNIEnv *env, jclass cls)
 {
 	UNUSED(env);
 	UNUSED(cls);
@@ -409,7 +409,7 @@ Java_RadioModel_fini(JNIEnv *env, jclass cls)
 }
 
 JNIEXPORT jint JNICALL
-Java_RadioModel_countBytes(JNIEnv *env, jclass cls)
+Java_com_vspro_util_RadioModel_countBytes(JNIEnv *env, jclass cls)
 {
 	int bytes = 0;
 
@@ -633,8 +633,9 @@ errout:
 }
 
 JNIEXPORT jdouble JNICALL
-Java_RadioModel_pointToPoint(JNIEnv *env, jclass cls, jdouble freq_mhz,
-    jboolean horiz_pol, jdouble xmit_gain, jdouble recv_min_gain,
+Java_com_vspro_util_RadioModel_pointToPoint(JNIEnv *env, jclass cls,
+    jdouble freq_mhz, jboolean horiz_pol, jdouble xmit_gain,
+    jdouble recv_min_gain,
     jdouble sta1_lat, jdouble sta1_lon, jdouble sta1_elev,
     jdouble sta2_lat, jdouble sta2_lon, jdouble sta2_elev)
 {
@@ -746,9 +747,9 @@ paint_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
 }
 
 JNIEXPORT void JNICALL
-Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
-    jboolean horiz_pol, jdouble xmit_gain, jdouble recv_min_gain,
-    jdouble sta1_elev, jboolean sta1_agl,
+Java_com_vspro_util_RadioModel_paintMapMulti(JNIEnv *env, jclass cls,
+    jdouble freq_mhz, jboolean horiz_pol, jdouble xmit_gain,
+    jdouble recv_min_gain, jdouble sta1_elev, jboolean sta1_agl,
     jdoubleArray sta2_lats, jdoubleArray sta2_lons, jdoubleArray sta2_elevs,
     jdouble deg_range, jdouble ctr_lat, jdouble ctr_lon, jint pixel_size,
     jstring out_file_str)
@@ -866,7 +867,8 @@ Java_RadioModel_paintMapMulti(JNIEnv *env, jclass cls, jdouble freq_mhz,
 }
 
 JNIEXPORT jdouble JNICALL
-Java_RadioModel_elevProbe(JNIEnv *env, jclass cls, jdouble lat, jdouble lon)
+Java_com_vspro_util_RadioModel_elevProbe(JNIEnv *env, jclass cls,
+    jdouble lat, jdouble lon)
 {
 	bool_t water;
 
