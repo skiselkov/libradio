@@ -209,10 +209,13 @@ load_water_mask(tile_t *tile, const char *tile_path, unsigned tile_lat,
 	DIR *dp;
 	struct dirent *de;
 	cairo_t *cr;
+	bool_t dir;
 
 	snprintf(dname, sizeof (dname), "%+03d%+04d", tile_lat, tile_lon);
 	path = mkpathname(tile_path, dname, NULL);
 
+	if (!file_exists(path, &dir) || !dir)
+		goto out;
 	dp = opendir(path);
 	if (dp == NULL)
 		goto out;
