@@ -22,7 +22,7 @@ OBJS = \
     ../itm_c.o \
     ../itm.o
 
-LDFLAGS = -Wl,--exclude-libs,ALL
+LDFLAGS = -Wl,--exclude-libs,ALL -fvisibility=hidden
 
 ifneq ($(win32),yes)
 
@@ -49,7 +49,6 @@ CXXFLAGS = $(DEFINES) -fPIC -O3 -g3 -fvisibility=hidden -DLIBEXPORT=''
 LIBS = -L$(ACFUTILS)/qmake/lin64 -lacfutils \
     $(shell $(ACFUTILS)/pkg-config-deps linux-64 --libs) \
     -lm -lpthread -static-libstdc++ -static-libgcc
-LDFLAGS += -fvisibility=hidden
 
 RADIOLIB=lib/libRadioModel.so
 
@@ -79,8 +78,6 @@ LIBS = -L$(ACFUTILS)/qmake/win64 -lacfutils \
     $(shell $(ACFUTILS)/pkg-config-deps win-64 --libs) \
     $(shell x86_64-w64-mingw32-g++ -print-file-name=libstdc++.a) \
     -lm -static-libstdc++ -static-libgcc
-
-LDFLAGS += -Wl,--out-implib,lib/RadioModel.lib -fvisibility=hidden
 
 RADIOLIB=lib/RadioModel.dll
 
