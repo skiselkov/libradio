@@ -104,6 +104,8 @@ public class TestMulti {
 	pat = Pattern.compile(type_regex[test_type]);
 
 	RadioModel.init("data", spacing[test_type], 0, 0);
+	System.out.println("Memory consumed: " +
+	    (RadioModel.countBytes() >> 10) + " kB");
 
 	while (input.hasNext()) {
 		String line = input.nextLine();
@@ -130,9 +132,6 @@ public class TestMulti {
 			    elev < -450 || elev > 9000 || freq > 150)
 				continue;
 
-			System.out.println(name + ":  lat: " + lat + " lon: " +
-			    lon + " elev: " + (int)m2ft(RadioModel.elevProbe(
-			    lat, lon)) + " ft");
 			names.add(name);
 			freqs.add(freq);
 			lats.add(lat);
@@ -167,6 +166,8 @@ public class TestMulti {
 		double ctr_lat, ctr_lon, deg_range;
 		String agl_flag = (agl ? "_agl" : "_msl");
 		String filename;
+		long start, end;
+		double d_t;
 
 		for (int i = 0, j = 0; i < freqs.size(); i++) {
 			double f = freqs.get(i).doubleValue();
@@ -196,10 +197,15 @@ public class TestMulti {
 		filename = String.format(out_dir + "/test_%.02f_%.0f%s.png",
 		    test_freq, test_elev, agl_flag);
 
+		start = System.currentTimeMillis();
 		RadioModel.paintMapMulti(130, true, xmit_power,
 		    recv_min_gain, test_elev, true,
 		    lats_arr, lons_arr, elevs_arr, deg_range,
 		    ctr_lat, ctr_lon, resolution, filename);
+		end = System.currentTimeMillis();
+		d_t = (end - start) / 1000.0;
+		System.out.format("took: %.1f secs, %d samples/sec\n", d_t,
+		    (int)((resolution * resolution * num_navaids) / d_t));
 	}
 
 	RadioModel.fini();

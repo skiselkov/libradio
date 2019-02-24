@@ -42,6 +42,14 @@
 #define	NUM_LAT	18
 #define	NUM_LON	36
 
+#if	defined(__GNUC__) || defined(__clang__)
+#define	likely(x)	__builtin_expect((x), 1)
+#define	unlikely(x)	__builtin_expect((x), 0)
+#else	/* !defined(__GNUC__) && !defined(__clang__) */
+#define	likely(x)	x
+#define	unlikely(x)	x
+#endif	/* !defined(__GNUC__) && !defined(__clang__) */
+
 /*
  * The X-Plane elevation data is stored in the alpha channel of the earth
  * orbit texture normal maps. The values range from 255 corresponding to
@@ -58,6 +66,8 @@
 #define	WATER_MASK_RES		2000	/* pixels */
 
 /* #define	RELIEF_DEBUG */
+
+#define	PIX_IDX(imgsz, x, y)	((y) * (imgsz) + (x))
 
 typedef struct {
 	unsigned	w;
@@ -434,19 +444,17 @@ Java_com_vspro_util_RadioModel_countBytes(JNIEnv *env, jclass cls)
 static inline double
 elev_filter_lin(tile_t *tile, double fract_lat, double fract_lon)
 {
-	double x_f = clamp(fract_lon * tile->w, 0, tile->w - 1);
-	/*
-	 * In-tile the rows are stored from higher latitudes to lower.
-	 */
-	double y_f = clamp((1 - fract_lat) * (tile->h - 1), 0, tile->h - 1);
+	double x_f = fract_lon * (tile->w - 1);
+	/* In-tile the rows are stored from higher latitudes to lower. */
+	double y_f = (1 - fract_lat) * (tile->h - 1);
 	unsigned x_lo = x_f, x_hi = MIN(x_lo + 1, tile->w - 1);
 	unsigned y_lo = y_f, y_hi = MIN(y_lo + 1, tile->h - 1);
 	double elev1, elev2, elev3, elev4;
 
-	elev1 = tile->points[y_lo * tile->w + x_lo];
-	elev2 = tile->points[y_lo * tile->w + x_hi];
-	elev3 = tile->points[y_hi * tile->w + x_lo];
-	elev4 = tile->points[y_hi * tile->w + x_hi];
+	elev1 = tile->points[PIX_IDX(tile->w, x_lo, y_lo)];
+	elev2 = tile->points[PIX_IDX(tile->w, x_hi, y_lo)];
+	elev3 = tile->points[PIX_IDX(tile->w, x_lo, y_hi)];
+	elev4 = tile->points[PIX_IDX(tile->w, x_hi, y_hi)];
 
 	return (wavg(wavg(elev1, elev2, x_f - x_lo),
 	    wavg(elev3, elev4, x_f - x_lo), y_f - y_lo));
@@ -455,14 +463,12 @@ elev_filter_lin(tile_t *tile, double fract_lat, double fract_lon)
 static inline bool_t
 tile_water_mask_read(tile_t *tile, double fract_lat, double fract_lon)
 {
-	unsigned x = clampi(round(fract_lon * (WATER_MASK_RES - 1)), 0,
-	    WATER_MASK_RES - 1);
-	unsigned y = clampi(round((1 - fract_lat) * (WATER_MASK_RES - 1)), 0,
-	    WATER_MASK_RES - 1);
+	unsigned x = (fract_lon * (WATER_MASK_RES - 1)) + 0.5;
+	unsigned y = ((1 - fract_lat) * (WATER_MASK_RES - 1)) + 0.5;
 	uint32_t *row;
 	unsigned row_slot, bit_slot;
 
-	if (tile->water_mask == NULL)
+	if (unlikely(tile->water_mask == NULL))
 		return (B_FALSE);
 
 	row = (uint32_t *)(&tile->water_mask[y * tile->water_mask_stride]);
@@ -484,7 +490,7 @@ tile_elev_read(geo_pos2_t p, bool_t *water)
 	ASSERT3U(tile_lat, <, NUM_LAT);
 	ASSERT3U(tile_lon, <, NUM_LON);
 	tile = &rm.tiles[tile_lat][tile_lon];
-	if (tile->points == NULL)
+	if (unlikely(tile->points == NULL))
 		return (0);
 
 	ASSERT3F(tile_lat_fract, >=, 0.0);
@@ -492,7 +498,7 @@ tile_elev_read(geo_pos2_t p, bool_t *water)
 	ASSERT3F(tile_lon_fract, >=, 0.0);
 	ASSERT3F(tile_lon_fract, <=, 1.0);
 
-	if (water != NULL) {
+	if (unlikely(water != NULL)) {
 		*water = tile_water_mask_read(tile, tile_lat_fract,
 		    tile_lon_fract);
 	}
@@ -504,17 +510,14 @@ static void
 relief_construct(geo_pos2_t p1, geo_pos2_t p2, double *elev, bool_t *water,
     size_t num_pts)
 {
-	double d_lat = p2.lat - p1.lat;
-	double d_lon = p2.lon - p1.lon;
+	double lat_step = (p2.lat - p1.lat) / (num_pts - 1);
+	double lon_step = (p2.lon - p1.lon) / (num_pts - 1);
+	double lat = p1.lat, lon = p1.lon;
 
 	for (size_t i = 0; i < num_pts; i++) {
-		double f = i / (double)(num_pts - 1);
-		/*
-		 * normalize_hdg here is used to make sure we handle
-		 * longitude wrapping correctly.
-		 */
-		elev[i] = tile_elev_read(GEO_POS2(p1.lat + f * d_lat,
-		    p1.lon + f * d_lon), &water[i]);
+		elev[i] = tile_elev_read(GEO_POS2(lat, lon), &water[i]);
+		lat += lat_step;
+		lon += lon_step;
 	}
 }
 
