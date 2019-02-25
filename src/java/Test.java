@@ -2,25 +2,29 @@ import java.io.File;
 import java.lang.Runtime;
 import java.lang.Thread;
 import java.util.ArrayList;
+import com.vspro.util.RadioModel;
 
 class Worker extends Thread {
     String filename;
     double xmit_power;
     double recv_min_gain;
     double acf_elev;
+    boolean acf_agl;
     double twr_lat;
     double twr_lon;
     double twr_elev;
     int resolution;
 
     Worker(String in_filename, double in_xmit_power, double in_recv_min_gain,
-	double in_acf_elev, double in_twr_lat, double in_twr_lon,
-	double in_twr_elev, int in_resolution)
+	double in_acf_elev, boolean in_acf_agl,
+	double in_twr_lat, double in_twr_lon, double in_twr_elev,
+	int in_resolution)
     {
 	filename = in_filename;
 	xmit_power = in_xmit_power;
 	recv_min_gain = in_recv_min_gain;
 	acf_elev = in_acf_elev;
+	acf_agl = in_acf_agl;
 	twr_lat = in_twr_lat;
 	twr_lon = in_twr_lon;
 	twr_elev = in_twr_elev;
@@ -35,8 +39,8 @@ class Worker extends Thread {
 
 	start = System.currentTimeMillis();
 	RadioModel.paintMap(135, true, xmit_power, recv_min_gain, acf_elev,
-	    twr_lat, twr_lon, twr_elev + 40, xmit_power / 10, resolution,
-	    filename);
+	    acf_agl, twr_lat, twr_lon, twr_elev + 40, 1,
+	    resolution, filename);
 	end = System.currentTimeMillis();
 	d_t = (end - start) / 1000.0;
 
@@ -73,6 +77,7 @@ public class Test {
 	    {33.8297, -116.5067, 476},	/* PSP */
 	    {37.6188, -122.3756, 13},	/* SFO */
 	    {34.228, -118.0552, 6300},	/* MT WILSON */
+	    {33.6756, -117.8681, 56}	/* SNA tower */
 	};
 	String filenames[] = {
 	    "01_LAX",
@@ -80,10 +85,11 @@ public class Test {
 	    "03_FAT",
 	    "04_PSP",
 	    "05_SFO",
-	    "06_MtWilson"
+	    "06_MtWilson",
+	    "07_SNA"
 	};
-	double[] acf_hgt = {0, 5000, 10000, 20000, 30000};
-	double[] xmit_power = {40, 50, 80};
+	double[] acf_hgt = {0, 100, 200, 500, 1000};
+	double[] xmit_power = {40, 50, 60, 70, 80};
 	double recv_min_gain = -100;
 	int resolution = 1024;
 	ArrayList<Worker> workers = new ArrayList<Worker>();
@@ -109,8 +115,8 @@ public class Test {
 
 				w = new Worker(filename, xmit_power[k],
 				    recv_min_gain, ft2m(twr_elev + acf_hgt[j]),
-				    twr_lat, twr_lon, ft2m(twr_elev),
-				    resolution);
+				    false, twr_lat, twr_lon,
+				    ft2m(twr_elev + 150), resolution);
 				w.start();
 				workers.add(w);
 
