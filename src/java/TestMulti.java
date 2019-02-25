@@ -69,12 +69,16 @@ public class TestMulti {
 	int resolution = 1024;
 	Pattern pat;
 	String out_dir = ".";
+	String data_dir = "data";
 	double rng_boost = 5;
 
 	for (int i = 0, n = args.length; i < n; i++) {
 		if (args[i].equals("-freq") && i + 1 < n) {
 			i++;
 			test_freq = Double.parseDouble(args[i]);
+		} else if (args[i].equals("-data")) {
+			i++;
+			data_dir = args[i];
 		} else if (args[i].equals("-agl")) {
 			agl = true;
 		} else if (args[i].equals("-type") && i + 1 < n) {
@@ -103,7 +107,7 @@ public class TestMulti {
 
 	pat = Pattern.compile(type_regex[test_type]);
 
-	RadioModel.init("data", spacing[test_type], 0, 0);
+	RadioModel.init(data_dir, spacing[test_type], 0, 0);
 	System.out.println("Memory consumed: " +
 	    (RadioModel.countBytes() >> 10) + " kB");
 

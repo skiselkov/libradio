@@ -34,6 +34,7 @@
 #include <acfutils/mt_cairo_render.h>
 #include <acfutils/perf.h>
 #include <acfutils/png.h>
+#include <acfutils/safe_alloc.h>
 #include <acfutils/time.h>
 
 #include "itm_c.h"
@@ -103,7 +104,7 @@ throw(JNIEnv *env, const char *classname, const char *fmt, ...)
 	l = vsnprintf(NULL, 0, fmt, ap);
 	va_end(ap);
 
-	msgbuf = malloc(l + 1);
+	msgbuf = safe_malloc(l + 1);
 
 	va_start(ap, fmt);
 	VERIFY3S(vsnprintf(msgbuf, l + 1, fmt, ap), ==, l);
@@ -337,11 +338,13 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 		int w, h;
 		uint8_t *pixels;
 		char *path;
+		bool_t nrm_map;
 
 		if (sscanf(de->d_name, "%d%d", &tile_lat, &tile_lon) != 2 ||
 		    strlen(de->d_name) != 15 || !file_ext(de->d_name, "png") ||
 		    !is_valid_lat(tile_lat) || !is_valid_lon(tile_lon))
 			continue;
+		nrm_map = (strstr(de->d_name, "-nrm.png") != NULL);
 
 		tile_lat_norm = floor(tile_lat / 10.0) + 9;
 		tile_lon_norm = floor(tile_lon / 10.0) + 18;
@@ -359,7 +362,10 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 		}
 
 		path = mkpathname(tile_path, de->d_name, NULL);
-		pixels = png_load_from_file_rgba(path, &w, &h);
+		if (nrm_map)
+			pixels = png_load_from_file_rgba(path, &w, &h);
+		else
+			pixels = png_load_from_file_grey(path, &w, &h);
 		if (pixels == NULL) {
 			throw(env, "java/lang/ExceptionInInitializerError",
 			    "Error reading PNG data from file %s", path);
@@ -372,15 +378,24 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 
 		tile->w = w;
 		tile->h = h;
+		/* In case of duplicity, kill the previous pixels */
+		free(tile->points);
 		tile->points =
-		    malloc(tile->w * tile->h * sizeof (*tile->points));
+		    safe_malloc(tile->w * tile->h * sizeof (*tile->points));
 		/*
 		 * Copy over and keep only the alpha channel, since that's
 		 * where our elevation data is. We'll pre-chew the samples
 		 * to be whole meters, to make subsequent lookups faster.
 		 */
-		for (int i = 0; i < w * h; i++)
-			tile->points[i] = ELEV_SAMPLE2MET(pixels[i * 4 + 3]);
+		if (nrm_map) {
+			for (int i = 0; i < w * h; i++) {
+				tile->points[i] =
+				    ELEV_SAMPLE2MET(pixels[i * 4 + 3]);
+			}
+		} else {
+			for (int i = 0; i < w * h; i++)
+				tile->points[i] = ELEV_SAMPLE2MET(pixels[i]);
+		}
 
 		lacf_free(pixels);
 
@@ -595,8 +610,8 @@ p2p_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
 		goto errout;
 
 	num_pts = clampi(dist / rm.spacing, 2, rm.max_pts);
-	elev = malloc(num_pts * sizeof (*elev));
-	water = malloc(num_pts * sizeof (*water));
+	elev = safe_malloc(num_pts * sizeof (*elev));
+	water = safe_malloc(num_pts * sizeof (*water));
 	relief_construct(GEO3_TO_GEO2(sta1_pos), GEO3_TO_GEO2(sta2_pos),
 	    elev, water, num_pts);
 
@@ -826,7 +841,7 @@ Java_com_vspro_util_RadioModel_paintMapMulti(JNIEnv *env, jclass cls,
 	}
 
 	out_file = (*env)->GetStringUTFChars(env, out_file_str, NULL);
-	pixels = malloc(4 * pixel_size * pixel_size);
+	pixels = safe_malloc(4 * pixel_size * pixel_size);
 
 	for (int y = 0; y < pixel_size; y++) {
 		for (int x = 0; x < pixel_size; x++) {
