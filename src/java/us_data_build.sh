@@ -82,7 +82,7 @@ for TILE in ${TILES[*]}; do
 			exit 1
 		fi
 	fi
-	"$STITCH" -r "$RESOLUTION" "$TILEPATH"
+	"$STITCH" -sr "$RESOLUTION" "$TILEPATH"
 	WATERTILE="$XPDIR/Resources/map data/water/$TILE"
 	if [ -d "$WATERTILE" ]; then
 		cp -r "$WATERTILE" .

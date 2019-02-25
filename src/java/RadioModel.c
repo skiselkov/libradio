@@ -277,6 +277,7 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 	const char *tile_path = NULL;
 	DIR *dp = NULL;
 	struct dirent *de;
+	typedef enum { FMT_NRM, FMT_HGT, FMT_H16 } imgfmt_t;
 
 	UNUSED(cls);
 
@@ -338,13 +339,18 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 		int w, h;
 		uint8_t *pixels;
 		char *path;
-		bool_t nrm_map;
+		imgfmt_t fmt;
 
 		if (sscanf(de->d_name, "%d%d", &tile_lat, &tile_lon) != 2 ||
 		    strlen(de->d_name) != 15 || !file_ext(de->d_name, "png") ||
 		    !is_valid_lat(tile_lat) || !is_valid_lon(tile_lon))
 			continue;
-		nrm_map = (strstr(de->d_name, "-nrm.png") != NULL);
+		if (strstr(de->d_name, "-nrm.png") != NULL)
+			fmt = FMT_NRM;
+		else if (strstr(de->d_name, "-hgt.png") != NULL)
+			fmt = FMT_HGT;
+		else
+			fmt = FMT_H16;
 
 		tile_lat_norm = floor(tile_lat / 10.0) + 9;
 		tile_lon_norm = floor(tile_lon / 10.0) + 18;
@@ -362,10 +368,12 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 		}
 
 		path = mkpathname(tile_path, de->d_name, NULL);
-		if (nrm_map)
+		if (fmt == FMT_NRM)
 			pixels = png_load_from_file_rgba(path, &w, &h);
-		else
+		else if (fmt == FMT_HGT)
 			pixels = png_load_from_file_grey(path, &w, &h);
+		else
+			pixels = png_load_from_file_grey16(path, &w, &h);
 		if (pixels == NULL) {
 			throw(env, "java/lang/ExceptionInInitializerError",
 			    "Error reading PNG data from file %s", path);
@@ -387,14 +395,20 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 		 * where our elevation data is. We'll pre-chew the samples
 		 * to be whole meters, to make subsequent lookups faster.
 		 */
-		if (nrm_map) {
+		if (fmt == FMT_NRM) {
 			for (int i = 0; i < w * h; i++) {
 				tile->points[i] =
 				    ELEV_SAMPLE2MET(pixels[i * 4 + 3]);
 			}
-		} else {
+		} else if (fmt == FMT_HGT) {
 			for (int i = 0; i < w * h; i++)
 				tile->points[i] = ELEV_SAMPLE2MET(pixels[i]);
+		} else {
+			const int16_t *pixels16 = (const int16_t *)pixels;
+			for (int i = 0; i < w * h; i++) {
+				tile->points[i] = BSWAP16(pixels16[i]) -
+				    INT16_MAX;
+			}
 		}
 
 		lacf_free(pixels);
@@ -743,8 +757,7 @@ paint_impl(double freq_mhz, bool_t horiz_pol, double xmit_gain,
 	signal_db = p2p_impl(freq_mhz, horiz_pol, xmit_gain, recv_min_gain,
 	    sta1_pos, twr, &elev, &water);
 
-	signal_rel = iter_fract(signal_db, recv_min_gain,
-	    xmit_gain - 90, B_TRUE);
+	signal_rel = iter_fract(signal_db, recv_min_gain, 0, B_TRUE);
 
 	r = (terr_color & 0xff0000) >> 16;
 	g = (terr_color & 0xff00) >> 8;
