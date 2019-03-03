@@ -769,6 +769,10 @@ ap_drs_config(double d_t)
 		break;
 	default:
 		dr_seti(&drs.ovrd_nav_heading, 0);
+		if (navrad.ap.ovrd_act) {
+			dr_seti(&drs.ovrd_ap, 0);
+			navrad.ap.ovrd_act = B_FALSE;
+		}
 		return;
 	}
 	is_loc = is_valid_loc_freq(radio->freq / 1000000.0);
