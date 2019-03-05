@@ -255,7 +255,7 @@ wavg(double x, double y, double w)
 			(old_val) = n; \
 	} while (0)
 
-distort_t *
+DISTORT_API distort_t *
 distort_init(unsigned sample_rate)
 {
 	distort_t *dis = (distort_t *) calloc(1, sizeof (*dis));
@@ -286,7 +286,7 @@ distort_init(unsigned sample_rate)
 	return (dis);
 }
 
-void
+DISTORT_API void
 distort_fini(distort_t *dis)
 {
 	free(dis->inbuf);
@@ -302,7 +302,7 @@ distort_fini(distort_t *dis)
 	free(dis);
 }
 
-void
+DISTORT_API void
 distort(distort_t *dis, int16_t *samples, size_t num_samples,
     double amplify, double noise_level)
 {
@@ -315,7 +315,7 @@ distort(distort_t *dis, int16_t *samples, size_t num_samples,
 	free(out_samples);
 }
 
-void
+DISTORT_API void
 distort_clear_buffers(distort_t *dis)
 {
 	dis->inbuf_fill = 0;

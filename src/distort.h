@@ -2,6 +2,9 @@
 #define	__DISTORT_H__
 
 #include <stdint.h>
+#if	IBM
+#include <windows.h>
+#endif
 
 #ifdef  __cplusplus
 extern "C" {
@@ -10,7 +13,7 @@ extern "C" {
 #if	IBM
 #define	DISTORT_API	__declspec(dllexport) __stdcall
 #else
-#define	DISTORT_API	extern
+#define	DISTORT_API
 #endif
 
 typedef struct distort_s distort_t;

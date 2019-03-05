@@ -22,9 +22,9 @@
 # Copyright 2019 Saso Kiselkov. All rights reserved.
 #
 
-CC=x86_64-w64-mingw32-gcc
-CXX=$(CC)
-LD=$(CC)
+CC = x86_64-w64-mingw32-gcc
+CXX = $(CC)
+LD = $(CC)
 
 OBJS=../distort.o ../kiss_fft.o
 CFLAGS += -fvisibility=hidden -DIBM=1
