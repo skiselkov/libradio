@@ -7,14 +7,20 @@
 extern "C" {
 #endif
 
+#if	IBM
+#define	DISTORT_API	__declspec(dllexport) __stdcall
+#else
+#define	DISTORT_API	extern
+#endif
+
 typedef struct distort_s distort_t;
 
 /*
  * Initializer and finalizer functions. Call to create & destroy context.
  * Sample rate must be one of: 44100 or 48000.
  */
-distort_t *distort_init(unsigned sample_rate);
-void distort_fini(distort_t *dis);
+DISTORT_API distort_t *distort_init(unsigned sample_rate);
+DISTORT_API void distort_fini(distort_t *dis);
 
 /*
  * Applies distortion to an input buffer. The buffer is replaced by the
@@ -37,15 +43,15 @@ void distort_fini(distort_t *dis);
  *	noise, 0.2 for moderate background noise, to 0.6 for heavy background
  *	noise (makes transmission almost unreadable).
  */
-void distort(distort_t *dis, int16_t *samples, size_t num_samples,
-    double amplify, double noise_level);
+DISTORT_API void distort(distort_t *dis, int16_t *samples,
+    size_t num_samples, double amplify, double noise_level);
 
 /*
  * Clears any cached buffers from the distortion object. Call this between
  * audio transmissions to avoid any partially completed chunks being played
  * at the start of an unrelated transmission.
  */
-void distort_clear_buffers(distort_t *dis);
+DISTORT_API void distort_clear_buffers(distort_t *dis);
 
 #ifdef  __cplusplus
 }
