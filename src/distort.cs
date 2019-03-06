@@ -26,7 +26,6 @@
 using System.Runtime.InteropServices;
 
 public class distort {
-
 	/*
 	 * Initializer and finalizer functions.
 	 * Call to create & destroy context.
@@ -66,7 +65,7 @@ public class distort {
 	 *	unreadable).
 	 */
 	[DllImport("distort.dll"), EntryPoint = "distort@28"]
-	public static extern void distort(IntPtr context, short[] samples,
+	public static extern void distort(IntPtr context, IntPtr samples,
 	    long num_samples, double amplify, double noise_level);
 
 	[DllImport("distort.dll"), EntryPoint = "distort_clear_buffers@4"]
