@@ -26,15 +26,17 @@
 using System.Runtime.InteropServices;
 
 public class distort {
-	[DllImport("distort.dll")]
 
 	/*
 	 * Initializer and finalizer functions.
 	 * Call to create & destroy context.
 	 * Sample rate must be one of: 44100 or 48000.
 	 */
-	public static extern IntPtr distort_init(int sample_rate);
-	public static extern void distort_fini(IntPtr context);
+	[DllImport("distort.dll"), EntryPoint = "distort_init@4"]
+	public static extern IntPtr init(int sample_rate);
+
+	[DllImport("distort.dll"), EntryPoint = "distort_fini@4"]
+	public static extern void fini(IntPtr context);
 
 	/*
 	 * Applies distortion to an input buffer. The buffer is replaced by the
@@ -63,8 +65,10 @@ public class distort {
 	 *	to 0.6 for heavy background noise (makes transmission almost
 	 *	unreadable).
 	 */
+	[DllImport("distort.dll"), EntryPoint = "distort@28"]
 	public static extern void distort(IntPtr context, short[] samples,
 	    long num_samples, double amplify, double noise_level);
 
-	public static extern void distort_clear_buffers(IntPtr context);
+	[DllImport("distort.dll"), EntryPoint = "distort_clear_buffers@4"]
+	public static extern void clear_buffers(IntPtr context);
 }
