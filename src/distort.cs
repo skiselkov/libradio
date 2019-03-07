@@ -66,7 +66,7 @@ public class distort {
 	 */
 	[DllImport("distort.dll"), EntryPoint = "distort@28"]
 	public static extern void distort(IntPtr context, IntPtr samples,
-	    long num_samples, double amplify, double noise_level);
+	    int num_samples, double amplify, double noise_level);
 
 	[DllImport("distort.dll"), EntryPoint = "distort_clear_buffers@4"]
 	public static extern void clear_buffers(IntPtr context);
