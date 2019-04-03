@@ -850,7 +850,7 @@ static void
 ap_radio_drs_config_vloc(radio_t *radio)
 {
 	double hdef;
-	bool_t tofrom;
+	bool_t tofrom = B_FALSE;
 
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
 
