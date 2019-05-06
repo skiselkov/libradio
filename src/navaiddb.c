@@ -507,11 +507,8 @@ parse_earth_nav(navaiddb_t *db, const char *filename)
 
 		line_nr++;
 
-		if (!parse_line(line, &nav)) {
-			logMsg("Error parsing %s: malformed data on line %d\n",
-			    filename, line_nr - 1);
+		if (!parse_line(line, &nav))
 			continue;
-		}
 
 		if (nav != NULL) {
 			avl_index_t where_id, where_lat, where_lon;
