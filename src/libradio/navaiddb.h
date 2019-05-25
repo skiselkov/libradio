@@ -69,8 +69,19 @@ typedef enum {
 	LTP_PROV_GP
 } ltp_prov_t;
 
+#define	NAVAIDDB_ID_LEN		8
+#define	NAVAIDDB_ICAO_LEN		8
+#define	NAVAIDDB_REGION_LEN	8
+#define	NAVAIDDB_NAME_LEN		32
+
 typedef struct {
+	/*
+	 * These are intentionally following each other. This way we can
+	 * use the concatenated representation of these two fielsd as a
+	 * unique key in the by_arpt hash table.
+	 */
 	navaid_type_t	type;
+	char		icao[NAVAIDDB_ICAO_LEN];
 
 	geo_pos3_t	pos;
 	double		xp_elev;
@@ -78,10 +89,14 @@ typedef struct {
 	uint64_t	freq;
 	double		range;
 
-	char		id[8];
-	char		icao[8];
-	char		region[8];
-	char		name[32];
+	char		id[NAVAIDDB_ID_LEN];
+	char		region[NAVAIDDB_REGION_LEN];
+	char		name[NAVAIDDB_NAME_LEN];
+
+	struct {
+		char		icao[NAVAIDDB_ICAO_LEN];
+		navaid_type_t	type;
+	} by_arpt_key;
 
 	union {
 		struct {

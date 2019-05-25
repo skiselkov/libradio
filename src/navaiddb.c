@@ -26,7 +26,9 @@
 
 #include <acfutils/log.h>
 #include <acfutils/helpers.h>
+#include <acfutils/htbl.h>
 #include <acfutils/perf.h>
+#include <acfutils/safe_alloc.h>
 #include <acfutils/thread.h>
 
 #include "libradio/navaiddb.h"
@@ -37,12 +39,15 @@
 #define	HZ2MHZ(freq)	((freq / 1000) / 1000.0)
 #define	HZ2KHZ(freq)	(freq / 1000)
 
+#define	NAVAIDDB_HTBL_SHIFT	17
+
 struct navaiddb_s {
 	list_t		navaids;
 	airportdb_t	*adb;
 	avl_tree_t	lat;
 	avl_tree_t	lon;
 	avl_tree_t	by_id;
+	htbl_t		by_arpt;
 };
 
 static inline int
@@ -130,6 +135,7 @@ navaids_flush(navaiddb_t *db)
 	cookie = NULL;
 	while (avl_destroy_nodes(&db->by_id, &cookie) != NULL)
 		;
+	htbl_empty(&db->by_arpt, NULL, NULL);
 	while ((navaid = list_remove_head(&db->navaids)) != NULL)
 		free(navaid);
 }
@@ -165,7 +171,7 @@ parse_navaid_common(char **comps, size_t n_comps, navaid_type_t type,
 	if (n_comps < min_n_comps)
 		return (NULL);
 
-	nav = calloc(1, sizeof (*nav));
+	nav = safe_calloc(1, sizeof (*nav));
 	nav->type = type;
 	nav->pos.lat = atof(comps[1]);
 	nav->pos.lon = atof(comps[2]);
@@ -477,6 +483,100 @@ parse_line(char *line, navaid_t **nav_pp)
 }
 
 static bool_t
+is_navaid_conflict(navaid_t *nav, navaid_t *nav2)
+{
+	enum {
+	    BRG_MATCH = 10 /* deg */,
+	    LOC_DIST_MATCH = 1000 /* m */,
+	    GS_DIST_MATCH = 750 /* m */,
+	    DME_DIST_MATCH = 500 /* m */
+	};
+	double dist;
+
+	ASSERT(nav != NULL);
+	ASSERT(nav2 != NULL);
+	ASSERT3U(nav->type, ==, nav2->type);
+
+	if (nav->freq != nav2->freq)
+		return (B_FALSE);
+	dist = vect3_abs(vect3_sub(nav->ecef, nav2->ecef));
+	switch (nav->type) {
+	case NAVAID_LOC:
+		return (dist < LOC_DIST_MATCH &&
+		    fabs(rel_hdg(nav->loc.brg, nav2->loc.brg)) < BRG_MATCH);
+	case NAVAID_GS:
+		return (dist < GS_DIST_MATCH &&
+		    fabs(rel_hdg(nav->gs.brg, nav2->gs.brg)) < BRG_MATCH);
+	case NAVAID_DME:
+		return (dist < DME_DIST_MATCH);
+	default:
+		return (B_FALSE);
+	}
+}
+
+/*
+ * Checks if the navaiddb contains a duplicate navaid similar to `nav' at the
+ * same airport and removes the duplicate. These duplicates arise primarily
+ * as a result of an outdated entry in the Global Airports' hand-placed
+ * localizers list with a different navaid identifier and a newer entry in
+ * AIRAC data with. These navaids will be typically be pretty close together,
+ * share the same frequency and be fairly similar in other parameters. Thus
+ * a duplicate navaid is defined as:
+ *
+ * LOC: same frequency, bearing within 10 degrees of each other and
+ *	less than 1000 meters apart
+ * GS: same frequency, bearing within 10 degrees of each other and
+ *	less than 750 meters apart
+ * DME: same frequency and less than 500 meters apart
+ *
+ * No other navaids can be duplicate.
+ */
+static void
+replace_arpt_navaid_duplicate(navaiddb_t *db, navaid_t *nav)
+{
+	const list_t *l;
+
+	ASSERT(db != NULL);
+	ASSERT(nav != NULL);
+
+	l = htbl_lookup_multi(&db->by_arpt, &nav->type);
+	if (l != NULL) {
+		/* Remove any too-similar-looking navaids at this airport */
+		for (void *v = list_head(l), *v_next = NULL;
+		    v != NULL; v = v_next) {
+			navaid_t *nav2 = HTBL_VALUE_MULTI(v);
+
+			/*
+			 * We could be removing this entry, so grab the next
+			 * in line ahead of time.
+			 */
+			v_next = list_next(l, v);
+			ASSERT3U(nav->type, ==, nav2->type);
+			ASSERT0(strcmp(nav->icao, nav2->icao));
+
+			if (is_navaid_conflict(nav, nav2)) {
+				avl_remove(&db->by_id, nav2);
+				avl_remove(&db->lat, nav2);
+				avl_remove(&db->lon, nav2);
+				list_remove(&db->navaids, nav2);
+				htbl_remove_multi(&db->by_arpt, &nav2->type, v);
+				free(nav2);
+				/*
+				 * Through the transitive property of
+				 * equivalence we know that as soon as we
+				 * have found one match, no other matches
+				 * could present (since inserting the navaid
+				 * we're about to remove would have removed
+				 * them already).
+				 */
+				break;
+			}
+		}
+	}
+	htbl_set(&db->by_arpt, &nav->type, nav);
+}
+
+static bool_t
 parse_earth_nav(navaiddb_t *db, const char *filename)
 {
 	FILE *fp = fopen(filename, "rb");
@@ -531,6 +631,10 @@ parse_earth_nav(navaiddb_t *db, const char *filename)
 			avl_insert(&db->lat, nav, where_lat);
 			avl_insert(&db->lon, nav, where_lon);
 			list_insert_tail(&db->navaids, nav);
+			if (nav->icao[0] != '\0' &&
+			    strcmp(nav->icao, "ENRT") != 0) {
+				replace_arpt_navaid_duplicate(db, nav);
+			}
 		}
 	}
 	lacf_free(line);
@@ -547,7 +651,7 @@ errout:
 navaiddb_t *
 navaiddb_create(const char *xpdir, airportdb_t *adb)
 {
-	navaiddb_t *db = calloc(1, sizeof (*db));
+	navaiddb_t *db = safe_calloc(1, sizeof (*db));
 	char *path;
 	bool_t parse_default = B_TRUE;
 
@@ -558,6 +662,13 @@ navaiddb_create(const char *xpdir, airportdb_t *adb)
 	    sizeof (navaid_t), offsetof(navaid_t, lon_node));
 	avl_create(&db->by_id, id_compar,
 	    sizeof (navaid_t), offsetof(navaid_t, id_node));
+	htbl_create(&db->by_arpt, 1 << NAVAIDDB_HTBL_SHIFT,
+	    /*
+	     * Use the concatenated representation of the `type' and `icao'
+	     * fields as the hash table key.
+	     */
+	    ((offsetof(navaid_t, icao) + NAVAIDDB_ICAO_LEN) -
+	    offsetof(navaid_t, type)), B_TRUE);
 	db->adb = adb;
 
 	/*
@@ -600,6 +711,9 @@ navaiddb_create(const char *xpdir, airportdb_t *adb)
 		lacf_free(path);
 	}
 
+	/* Flush out the by_arpt hash table, don't need it anymore */
+	htbl_empty(&db->by_arpt, NULL, NULL);
+
 	return (db);
 }
 
@@ -611,6 +725,7 @@ navaiddb_destroy(navaiddb_t *db)
 	avl_destroy(&db->lat);
 	avl_destroy(&db->lon);
 	avl_destroy(&db->by_id);
+	htbl_destroy(&db->by_arpt);
 	list_destroy(&db->navaids);
 }
 
@@ -763,10 +878,10 @@ navaiddb_query(navaiddb_t *db, geo_pos2_t center, double radius,
 	VERIFY3P(avl_find(&db->lat, &srch, &where_lat), ==, NULL);
 	VERIFY3P(avl_find(&db->lon, &srch, &where_lon), ==, NULL);
 
-	list = calloc(1, sizeof (*list));
+	list = safe_calloc(1, sizeof (*list));
 	list->num_navaids = navaids_gather(db, center, id, freq, type,
 	    lat_spacing, lon_spacing, where_lat, where_lon, NULL);
-	list->navaids = calloc(list->num_navaids, sizeof (*list->navaids));
+	list->navaids = safe_calloc(list->num_navaids, sizeof (*list->navaids));
 	navaids_gather(db, center, id, freq, type, lat_spacing, lon_spacing,
 	    where_lat, where_lon, list);
 
