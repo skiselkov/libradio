@@ -66,6 +66,7 @@
 #define	DME_UPD_RATE		1	/* FILTER_IN rate arg */
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
 #define	DME_CHG_DELAY		1	/* seconds */
+#define	FLOOP_INTVAL		0.05	/* seconds */
 
 #define	AUDIO_BUF_NUM_CHUNKS	110
 #define	VOR_BUF_NUM_SAMPLES	4800
@@ -1530,7 +1531,7 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 out:
 	navrad.last_t = navrad.cur_t;
 
-	return (-1);
+	return (FLOOP_INTVAL);
 }
 
 static bool_t
@@ -2204,7 +2205,7 @@ navrad_init(navaiddb_t *db)
 	}
 	radio_init(&navrad.dme_radio, 1, NAVRAD_TYPE_DME);
 
-	XPLMRegisterFlightLoopCallback(floop_cb, -1, NULL);
+	XPLMRegisterFlightLoopCallback(floop_cb, FLOOP_INTVAL, NULL);
 
 	mutex_init(&profile_debug.lock);
 	mutex_init(&profile_debug.render_lock);
