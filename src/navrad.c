@@ -2395,7 +2395,7 @@ navrad_set_obs(unsigned nr, double obs)
 	UNUSED(nr);
 	UNUSED(obs);
 	VERIFY_MSG(0, "This function isn't valid for libradio compiled "
-	    "with USE_XPLANE_RADIO_DRS=1");
+	    "with USE_XPLANE_RADIO_DRS=%d", USE_XPLANE_RADIO_DRS);
 #else	/* !USE_XPLANE_RADIO_DRS */
 	ASSERT(inited);
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
