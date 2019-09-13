@@ -468,7 +468,9 @@ static double radio_get_bearing(radio_t *radio);
 static double radio_get_dme(radio_t *radio);
 static void radio_brg_update(radio_t *radio, double d_t);
 static void radio_dme_update(radio_t *radio, double d_t);
+#if	USE_XPLANE_RADIO_DRS
 static double signal_db_upd_rate(double orig_rate, double signal_db);
+#endif
 
 /*
  * Computes the actual signal level at the receiver, applying various
@@ -1733,12 +1735,10 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 		    "sim/cockpit/radios/adf%d_dir_degt", nr);
 		break;
 	case NAVRAD_TYPE_DME:
-		if (nr == 1) {
-			fdr_find(&radio->drs.dme.freq,
-			    "sim/cockpit2/radios/actuators/dme_frequency_hz");
-			fdr_find(&radio->drs.dme.dme_nm,
-			    "sim/cockpit/radios/standalone_dme_dist_m");
-		}
+		fdr_find(&radio->drs.dme.freq,
+		    "sim/cockpit2/radios/actuators/dme_frequency_hz");
+		fdr_find(&radio->drs.dme.dme_nm,
+		    "sim/cockpit/radios/standalone_dme_dist_m");
 		break;
 	}
 #endif	/* USE_XPLANE_RADIO_DRS */
@@ -1827,6 +1827,7 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 	return (winner);
 }
 
+#if	USE_XPLANE_RADIO_DRS
 static double
 signal_db_upd_rate(double orig_rate, double signal_db)
 {
@@ -1834,6 +1835,7 @@ signal_db_upd_rate(double orig_rate, double signal_db)
 	double div = pow(10, d_sig / 10);
 	return (orig_rate + (orig_rate * 20) / div);
 }
+#endif	/* USE_XPLANE_RADIO_DRS */
 
 static double
 signal_error(double signal_db)
@@ -2065,6 +2067,7 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 		radio->hdef_lock_t = NAN;
 	}
 #else	/* !USE_XPLANE_RADIO_DRS */
+	UNUSED(d_t);
 	if (pilot) {
 		radio->hdef_pilot = hdef;
 		radio->tofrom_pilot = tofrom;
@@ -2161,6 +2164,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 	    d_t, VDEF_RATE_UPD_RATE(signal_db));
 	radio->vdef_prev = radio->vdef;
 #else	/* !USE_XPLANE_RADIO_DRS */
+	UNUSED(d_t);
 	radio->vdef = vdef;
 #endif	/* !USE_XPLANE_RADIO_DRS */
 }
@@ -2194,6 +2198,7 @@ radio_brg_update(radio_t *radio, double d_t)
 		radio->brg_lock_t = navrad.cur_t;
 	}
 #else	/* !USE_XPLANE_RADIO_DRS */
+	UNUSED(d_t);
 	if (!isnan(brg))
 		radio->brg = normalize_hdg(brg);
 	else
