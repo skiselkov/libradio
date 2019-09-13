@@ -69,15 +69,26 @@
 #define	BRG_UPD_RATE		1	/* FILTER_IN rate arg */
 #define	DME_UPD_RATE		1	/* FILTER_IN rate arg */
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
-#define	DME_CHG_DELAY		1	/* seconds */
 #define	FLOOP_INTVAL		0.05	/* seconds */
 
 #define	AUDIO_BUF_NUM_CHUNKS	110
 #define	VOR_BUF_NUM_SAMPLES	4800
 #define	DME_BUF_NUM_SAMPLES	4788
 
+#if	USE_XPLANE_RADIO_DRS
+#define	DME_CHG_DELAY		1	/* seconds */
 #define	NAVRAD_LOCK_DELAY_VLOC	2	/* seconds */
 #define	NAVRAD_LOCK_DELAY_ADF	1	/* seconds */
+#else	/* !USE_XPLANE_RADIO_DRS */
+/*
+ * In non-X-Plane radio mode, start providing the tuned outputs
+ * immediately. The custom radio code will figure out the proper
+ * signal tuning delays.
+ */
+#define	DME_CHG_DELAY		0	/* seconds */
+#define	NAVRAD_LOCK_DELAY_VLOC	0	/* seconds */
+#define	NAVRAD_LOCK_DELAY_ADF	0	/* seconds */
+#endif	/* !USE_XPLANE_RADIO_DRS */
 #define	NAVRAD_PARKED_BRG	90	/* bearing pointer parked pos */
 
 #define	MAX_DR_VALS		8
