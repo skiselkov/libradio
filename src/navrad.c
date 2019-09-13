@@ -37,6 +37,10 @@
 #include "libradio/navrad.h"
 #include "itm_c.h"
 
+#ifndef	USE_XPLANE_RADIO_DRS
+#define	USE_XPLANE_RADIO_DRS	1
+#endif
+
 #define	WORKER_INTVAL		500000
 #define	DEF_UPD_RATE		1
 #define	MIN_DELTA_T		0.01
@@ -152,11 +156,17 @@ struct radio_s {
 	navrad_type_t	type;
 	unsigned	nr;
 
+#if	USE_XPLANE_RADIO_DRS
 	dr_t		fail_dr[2];
+#endif
 	bool_t		failed;
 
 	mutex_t		lock;
+#if	!USE_XPLANE_RADIO_DRS
+	double		obs;
+#endif
 	uint64_t	freq;
+	uint64_t	new_freq;
 	double		freq_chg_t;
 	double		hdef_pilot;
 	bool_t		tofrom_pilot;
@@ -195,6 +205,7 @@ struct radio_s {
 		dr_t		propmode_dr;
 	} dr_vals[MAX_DR_VALS];
 
+#if	USE_XPLANE_RADIO_DRS
 	union {
 		struct {
 			dr_t	ovrd_nav_needles;
@@ -223,6 +234,7 @@ struct radio_s {
 			dr_t	dme_nm;
 		} dme;
 	} drs;
+#endif	/* USE_XPLANE_RADIO_DRS */
 };
 
 static struct {
@@ -243,7 +255,8 @@ static struct {
 
 	radio_t			vloc_radios[NUM_NAV_RADIOS];
 	radio_t			adf_radios[NUM_NAV_RADIOS];
-	radio_t			dme_radio;
+	unsigned		num_dmes;
+	radio_t			dme_radio[MAX_NUM_DMES];
 	worker_t		worker;
 
 	const egpws_intf_t	*opengpws;
@@ -277,7 +290,9 @@ static struct {
 	dr_t		elev;
 	dr_t		sim_time;
 	dr_t		magvar;
+	dr_t		hdg;
 
+#if	USE_XPLANE_RADIO_DRS
 	dr_t		ap_steer_deg_mag;
 	dr_t		ovrd_nav_heading;
 	dr_t		ovrd_adf;
@@ -285,10 +300,9 @@ static struct {
 	dr_t		ovrd_ap;
 	dr_t		hsi_sel;
 	dr_t		ap_state;
-	dr_t		hdg;
 	dr_t		hpath;
-	dr_t		alpha;
 	dr_t		ap_bc;
+#endif	/* USE_XPLANE_RADIO_DRS */
 } drs;
 
 static const char *morse_table[] = {
@@ -752,6 +766,15 @@ signal_levels_update(avl_tree_t *tree, double d_t, fpp_t *fpp,
 	}
 }
 
+static bool_t
+radio_adf_is_ant_mode(radio_t *radio)
+{
+	return (radio->type == NAVRAD_TYPE_ADF &&
+	    (radio->adf_mode == ADF_MODE_ANT ||
+	    radio->adf_mode == ADF_MODE_ANT_BFO));
+}
+
+#if	USE_XPLANE_RADIO_DRS
 static void
 ap_drs_config(double d_t)
 {
@@ -903,14 +926,6 @@ ap_radio_drs_config_dme(radio_t *radio)
 		dr_setf(&radio->drs.dme.dme_nm, 0);
 }
 
-static bool_t
-radio_adf_is_ant_mode(radio_t *radio)
-{
-	return (radio->type == NAVRAD_TYPE_ADF &&
-	    (radio->adf_mode == ADF_MODE_ANT ||
-	    radio->adf_mode == ADF_MODE_ANT_BFO));
-}
-
 static void
 ap_radio_drs_config(radio_t *radio, double d_t)
 {
@@ -941,6 +956,7 @@ ap_radio_drs_config(radio_t *radio, double d_t)
 		}
 	}
 }
+#endif	/* USE_XPLANE_RADIO_DRS */
 
 static void
 radio_floop_cb(radio_t *radio, double d_t)
@@ -949,6 +965,7 @@ radio_floop_cb(radio_t *radio, double d_t)
 	fpp_t fpp = ortho_fpp_init(GEO3_TO_GEO2(navrad.pos), 0, &wgs84,
 	    B_FALSE);
 
+#if	USE_XPLANE_RADIO_DRS
 	switch (radio->type) {
 	case NAVRAD_TYPE_VLOC:
 		new_freq = dr_getf(&radio->drs.vloc.freq) * 10000;
@@ -958,14 +975,22 @@ radio_floop_cb(radio_t *radio, double d_t)
 		break;
 	default:
 		ASSERT3U(radio->type, ==, NAVRAD_TYPE_DME);
-		new_freq = dr_getf(&radio->drs.dme.freq) * 10000;
+		if (radio->nr == 0)
+			new_freq = dr_getf(&radio->drs.dme.freq) * 10000;
+		else
+			new_freq = radio->freq;
 		break;
 	}
+#else	/* !USE_XPLANE_RADIO_DRS */
+	new_freq = radio->new_freq;
+#endif	/* !USE_XPLANE_RADIO_DRS */
 
 	mutex_enter(&radio->lock);
 
+#if	USE_XPLANE_RADIO_DRS
 	radio->failed = (dr_geti(&radio->fail_dr[0]) == 6 ||
 	    dr_geti(&radio->fail_dr[1]) == 6);
+#endif	/* USE_XPLANE_RADIO_DRS */
 	if (radio->failed)
 		new_freq = 0;
 
@@ -1505,9 +1530,12 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 		radio_floop_cb(&navrad.vloc_radios[i], d_t);
 		radio_floop_cb(&navrad.adf_radios[i], d_t);
 	}
-	radio_floop_cb(&navrad.dme_radio, d_t);
+	for (unsigned i = 0; i < navrad.num_dmes; i++)
+		radio_floop_cb(&navrad.dme_radio[i], d_t);
 
+#if	USE_XPLANE_RADIO_DRS
 	ap_drs_config(d_t);
+#endif
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
 		/* VLOC radios */
 		radio_hdef_update(&navrad.vloc_radios[i], B_TRUE, d_t);
@@ -1515,17 +1543,23 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 		radio_vdef_update(&navrad.vloc_radios[i], d_t);
 		radio_brg_update(&navrad.vloc_radios[i], d_t);
 		radio_dme_update(&navrad.vloc_radios[i], d_t);
+#if	USE_XPLANE_RADIO_DRS
 		ap_radio_drs_config(&navrad.vloc_radios[i], d_t);
+#endif
 
 		/* ADF radios */
 		radio_brg_update(&navrad.adf_radios[i], d_t);
+#if	USE_XPLANE_RADIO_DRS
 		ap_radio_drs_config(&navrad.adf_radios[i], d_t);
+#endif
 	}
-	radio_dme_update(&navrad.dme_radio, d_t);
-	ap_radio_drs_config(&navrad.dme_radio, d_t);
-
+	for (unsigned i = 0; i < navrad.num_dmes; i++)
+		radio_dme_update(&navrad.dme_radio[i], d_t);
+#if	USE_XPLANE_RADIO_DRS
+	ap_radio_drs_config(&navrad.dme_radio[0], d_t);
 	dr_seti(&drs.ovrd_dme, 1);
 	dr_seti(&drs.ovrd_adf, 1);
+#endif
 
 	profile_debug_floop();
 out:
@@ -1555,7 +1589,8 @@ worker_cb(void *userinfo)
 		radio_worker(&navrad.vloc_radios[i], pos, &fpp);
 		radio_worker(&navrad.adf_radios[i], pos, &fpp);
 	}
-	radio_worker(&navrad.dme_radio, pos, &fpp);
+	for (unsigned i = 0; i < navrad.num_dmes; i++)
+		radio_worker(&navrad.dme_radio[i], pos, &fpp);
 
 	return (B_TRUE);
 }
@@ -1605,6 +1640,7 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 	radio->distort_vloc = distort_init(NAVRAD_AUDIO_SRATE);
 	radio->distort_dme = distort_init(NAVRAD_AUDIO_SRATE);
 
+#if	USE_XPLANE_RADIO_DRS
 	switch (type) {
 	case NAVRAD_TYPE_VLOC:
 		fdr_find(&radio->fail_dr[0],
@@ -1623,6 +1659,7 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 		fdr_find(&radio->fail_dr[1], "sim/operation/failures/rel_dme");
 		break;
 	}
+#endif	/* USE_XPLANE_RADIO_DRS */
 
 	for (int i = 0; i < MAX_DR_VALS; i++) {
 		const char *name = navrad_type2str(radio->type);
@@ -1640,6 +1677,7 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 		    "libradio/%s%d/navaid%d/propmode", name, nr, i);
 	}
 
+#if	USE_XPLANE_RADIO_DRS
 	switch (type) {
 	case NAVRAD_TYPE_VLOC:
 		fdr_find(&radio->drs.vloc.ovrd_nav_needles,
@@ -1680,12 +1718,15 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 		    "sim/cockpit/radios/adf%d_dir_degt", nr);
 		break;
 	case NAVRAD_TYPE_DME:
-		fdr_find(&radio->drs.dme.freq,
-		    "sim/cockpit2/radios/actuators/dme_frequency_hz");
-		fdr_find(&radio->drs.dme.dme_nm,
-		    "sim/cockpit/radios/standalone_dme_dist_m");
+		if (nr == 1) {
+			fdr_find(&radio->drs.dme.freq,
+			    "sim/cockpit2/radios/actuators/dme_frequency_hz");
+			fdr_find(&radio->drs.dme.dme_nm,
+			    "sim/cockpit/radios/standalone_dme_dist_m");
+		}
 		break;
 	}
+#endif	/* USE_XPLANE_RADIO_DRS */
 }
 
 static void
@@ -1719,8 +1760,10 @@ radio_fini(radio_t *radio)
 		dr_delete(&radio->dr_vals[i].propmode_dr);
 	}
 
+#if	USE_XPLANE_RADIO_DRS
 	if (radio->type == NAVRAD_TYPE_VLOC)
 		dr_seti(&radio->drs.vloc.ovrd_nav_needles, 0);
+#endif	/* USE_XPLANE_RADIO_DRS */
 
 	mutex_destroy(&radio->lock);
 }
@@ -1936,10 +1979,15 @@ radio_comp_hdef_vor(radio_t *radio, bool_t pilot, bool_t *tofrom_p)
 
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
 
+#if	USE_XPLANE_RADIO_DRS
 	if (pilot)
 		crs = dr_getf(&radio->drs.vloc.crs_degm_pilot);
 	else
 		crs = dr_getf(&radio->drs.vloc.crs_degm_copilot);
+#else	/* USE_XPLANE_RADIO_DRS */
+	UNUSED(pilot);
+	crs = radio->obs;
+#endif	/* USE_XPLANE_RADIO_DRS */
 
 	if (isnan(radial) || isnan(crs))
 		return (NAN);
@@ -2168,6 +2216,18 @@ get_gpws_intf_cb(float elapsed, float d_t, int counter, void *refcon)
 bool_t
 navrad_init(navaiddb_t *db)
 {
+	return (navrad_init2(db, 1));
+}
+
+bool_t
+navrad_init2(navaiddb_t *db, unsigned num_dmes)
+{
+	ASSERT(db != NULL);
+	num_dmes = MAX(num_dmes, 1);
+#if	USE_XPLANE_RADIO_DRS
+	ASSERT3U(num_dmes, ==, 1);
+#endif
+
 	ASSERT(!inited);
 	inited = B_TRUE;
 
@@ -2175,6 +2235,7 @@ navrad_init(navaiddb_t *db)
 	memset(&profile_debug, 0, sizeof (profile_debug));
 
 	navrad.db = db;
+	navrad.num_dmes = num_dmes;
 	mutex_init(&navrad.lock);
 
 	fdr_find(&drs.lat, "sim/flightmodel/position/latitude");
@@ -2182,7 +2243,9 @@ navrad_init(navaiddb_t *db)
 	fdr_find(&drs.elev, "sim/flightmodel/position/elevation");
 	fdr_find(&drs.sim_time, "sim/time/total_running_time_sec");
 	fdr_find(&drs.magvar, "sim/flightmodel/position/magnetic_variation");
+	fdr_find(&drs.hdg, "sim/flightmodel/position/psi");
 
+#if	USE_XPLANE_RADIO_DRS
 	fdr_find(&drs.ap_steer_deg_mag,
 	    "sim/cockpit/autopilot/nav_steer_deg_mag");
 	fdr_find(&drs.ovrd_nav_heading,
@@ -2193,17 +2256,17 @@ navrad_init(navaiddb_t *db)
 	    "sim/cockpit2/radios/actuators/HSI_source_select_pilot");
 	fdr_find(&drs.ap_state, "sim/cockpit/autopilot/autopilot_state");
 	fdr_find(&drs.ap_bc, "sim/cockpit2/autopilot/backcourse_on");
-	fdr_find(&drs.hdg, "sim/flightmodel/position/psi");
 	fdr_find(&drs.hpath, "sim/flightmodel/position/hpath");
 
 	fdr_find(&drs.ovrd_ap, "sim/operation/override/override_autopilot");
-	fdr_find(&drs.alpha, "sim/flightmodel/position/alpha");
+#endif	/* USE_XPLANE_RADIO_DRS */
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
 		radio_init(&navrad.vloc_radios[i], i + 1, NAVRAD_TYPE_VLOC);
 		radio_init(&navrad.adf_radios[i], i + 1, NAVRAD_TYPE_ADF);
 	}
-	radio_init(&navrad.dme_radio, 1, NAVRAD_TYPE_DME);
+	for (unsigned i = 0; i < navrad.num_dmes; i++)
+		radio_init(&navrad.dme_radio[i], i + 1, NAVRAD_TYPE_DME);
 
 	XPLMRegisterFlightLoopCallback(floop_cb, FLOOP_INTVAL, NULL);
 
@@ -2254,12 +2317,15 @@ navrad_fini(void)
 		radio_fini(&navrad.vloc_radios[i]);
 		radio_fini(&navrad.adf_radios[i]);
 	}
-	radio_fini(&navrad.dme_radio);
+	for (unsigned i = 0; i < navrad.num_dmes; i++)
+		radio_fini(&navrad.dme_radio[i]);
 
+#if	USE_XPLANE_RADIO_DRS
 	dr_seti(&drs.ovrd_nav_heading, 0);
 	dr_seti(&drs.ovrd_dme, 0);
 	dr_seti(&drs.ovrd_adf, 0);
 	dr_seti(&drs.ovrd_ap, 0);
+#endif	/* USE_XPLANE_RADIO_DRS */
 
 	mutex_destroy(&navrad.lock);
 	XPLMUnregisterFlightLoopCallback(floop_cb, NULL);
@@ -2270,13 +2336,20 @@ find_radio(navrad_type_t type, unsigned nr)
 {
 	ASSERT3U(type, <=, NAVRAD_TYPE_DME);
 	if (type == NAVRAD_TYPE_DME) {
-		ASSERT3U(nr, ==, 0);
-		return (&navrad.dme_radio);
+		ASSERT3U(nr, <, navrad.num_dmes);
+		return (&navrad.dme_radio[nr]);
 	} else {
 		ASSERT3U(nr, <, NUM_NAV_RADIOS);
 		return (type == NAVRAD_TYPE_VLOC ? &navrad.vloc_radios[nr] :
 		    &navrad.adf_radios[nr]);
 	}
+}
+
+void
+navrad_set_freq(navrad_type_t type, unsigned nr, uint64_t freq)
+{
+	radio_t *radio = find_radio(type, nr);
+	radio->new_freq = freq;
 }
 
 uint64_t
@@ -2295,6 +2368,21 @@ navrad_get_bearing(navrad_type_t type, unsigned nr)
 	if (radio->failed)
 		return (NAN);
 	return (normalize_hdg(radio->brg));
+}
+
+void
+navrad_set_obs(unsigned nr, double obs)
+{
+#if	USE_XPLANE_RADIO_DRS
+	UNUSED(nr);
+	UNUSED(obs);
+	VERIFY_MSG(0, "This function isn't valid for libradio compiled "
+	    "with USE_XPLANE_RADIO_DRS=1");
+#else	/* !USE_XPLANE_RADIO_DRS */
+	ASSERT(inited);
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	navrad.vloc_radios[nr].obs = obs;
+#endif	/* !USE_XPLANE_RADIO_DRS */
 }
 
 double

@@ -33,6 +33,7 @@ extern "C" {
 #endif
 
 #define	NUM_NAV_RADIOS		2
+#define	MAX_NUM_DMES		8
 #define	NAVRAD_AUDIO_SRATE	48000
 
 typedef enum {
@@ -49,7 +50,10 @@ typedef enum {
 } adf_mode_t;
 
 bool_t navrad_init(navaiddb_t *db);
+bool_t navrad_init2(navaiddb_t *db, unsigned num_dmes);
 void navrad_fini(void);
+
+void navrad_set_freq(navrad_type_t type, unsigned nr, uint64_t freq);
 
 uint64_t navrad_get_freq(navrad_type_t type, unsigned nr);
 double navrad_get_bearing(navrad_type_t type, unsigned nr);
@@ -59,6 +63,7 @@ bool_t navrad_have_bearing(navrad_type_t type, unsigned nr);
 /*
  * These are specific to VLOC-type radios, so no need to pass radio type.
  */
+void navrad_set_obs(unsigned nr, double obs);
 double navrad_get_radial(unsigned nr);
 double navrad_get_hdef(unsigned nr, bool_t pilot, bool_t *tofrom);
 double navrad_get_vdef(unsigned nr);
