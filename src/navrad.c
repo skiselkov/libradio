@@ -42,13 +42,14 @@
 #endif
 
 #define	WORKER_INTVAL		500000
-#define	DEF_UPD_RATE		1
+#define	DEF_UPD_RATE(signal_db)	signal_db_upd_rate(1, (signal_db))
 #define	MIN_DELTA_T		0.01
 #define	NAVAID_SRCH_RANGE	NM2MET(300)
 #define	ANT_BASE_GAIN		92.0	/* dB */
 #define	INTERFERENCE_LIMIT	16.0	/* dB */
 #define	NOISE_LEVEL_AUDIO	-55.0	/* dB */
 #define	NOISE_FLOOR_AUDIO	-80.0	/* dB */
+#define	NOISE_FLOOR_ERROR_RATE	-79.0	/* dB */
 #define	NOISE_FLOOR_NAV_ID	-73.0	/* dB */
 #define	NOISE_FLOOR_SIGNAL	-70.0	/* dB */
 #define	NOISE_FLOOR_TEST	-85.0	/* dB */
@@ -63,11 +64,11 @@
 #define	HSENS_LOC		12.0	/* dot deflection per deg correction */
 #define	HDEF_FEEDBACK		15	/* dots per second */
 #define	MAX_INTCPT_ANGLE	30	/* degrees */
-#define	HDEF_RATE_UPD_RATE	0.4	/* FILTER_IN rate arg */
-#define	VDEF_RATE_UPD_RATE	0.4	/* FILTER_IN rate arg */
-#define	AP_STEER_UPD_RATE	0.25	/* FILTER_IN rate arg */
-#define	BRG_UPD_RATE		1	/* FILTER_IN rate arg */
-#define	DME_UPD_RATE		1	/* FILTER_IN rate arg */
+#define	HDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.5, (signal_db))
+#define	VDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.5, (signal_db))
+#define	AP_STEER_UPD_RATE(signal_db)	signal_db_upd_rate(0.35, (signal_db))
+#define	BRG_UPD_RATE(signal_db)		signal_db_upd_rate(1, (signal_db))
+#define	DME_UPD_RATE(signal_db)		signal_db_upd_rate(0.7, (signal_db))
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
 #define	FLOOP_INTVAL		0.05	/* seconds */
 
@@ -194,6 +195,9 @@ struct radio_s {
 	double		dme;
 	double		dme_lock_t;
 	adf_mode_t	adf_mode;
+
+	/* input signal level, for driving filtering algorithms */
+	double		signal_db;
 
 	double		vdef;
 	double		vdef_prev;
@@ -464,6 +468,7 @@ static double radio_get_bearing(radio_t *radio);
 static double radio_get_dme(radio_t *radio);
 static void radio_brg_update(radio_t *radio, double d_t);
 static void radio_dme_update(radio_t *radio, double d_t);
+static double signal_db_upd_rate(double orig_rate, double signal_db);
 
 /*
  * Computes the actual signal level at the receiver, applying various
@@ -818,7 +823,7 @@ ap_drs_config(double d_t)
 
 	hdef = dr_getf(&radio->drs.vloc.hdef_pilot);
 	FILTER_IN(navrad.ap.hdef_rate, (hdef - navrad.ap.hdef_prev) / d_t, d_t,
-	    HDEF_RATE_UPD_RATE);
+	    HDEF_RATE_UPD_RATE(radio->signal_db));
 	beta = rel_hdg(normalize_hdg(dr_getf(&drs.hpath)),
 	    normalize_hdg(dr_getf(&drs.hdg)));
 	if (is_loc) {
@@ -860,7 +865,8 @@ ap_drs_config(double d_t)
 		corr = -corr;
 	intcpt = normalize_hdg(dr_getf(&radio->drs.vloc.crs_degm_pilot) +
 	    corr + beta);
-	FILTER_IN(navrad.ap.steer_tgt, intcpt, d_t, AP_STEER_UPD_RATE);
+	FILTER_IN(navrad.ap.steer_tgt, intcpt, d_t,
+	    AP_STEER_UPD_RATE(radio->signal_db));
 	dr_setf(&drs.ap_steer_deg_mag, navrad.ap.steer_tgt);
 
 	navrad.ap.hdef_prev = hdef;
@@ -961,7 +967,8 @@ ap_radio_drs_config(radio_t *radio, double d_t)
 		} else {
 			double brg = normalize_hdg(dr_getf(brg_dr));
 			double tgt = brg + rel_hdg(brg, NAVRAD_PARKED_BRG);
-			FILTER_IN(brg, tgt, d_t, BRG_UPD_RATE);
+			FILTER_IN(brg, tgt, d_t,
+			    BRG_UPD_RATE(radio->signal_db));
 			brg = normalize_hdg(brg);
 			dr_setf(brg_dr, brg);
 		}
@@ -986,10 +993,7 @@ radio_floop_cb(radio_t *radio, double d_t)
 		break;
 	default:
 		ASSERT3U(radio->type, ==, NAVRAD_TYPE_DME);
-		if (radio->nr == 0)
-			new_freq = dr_getf(&radio->drs.dme.freq) * 10000;
-		else
-			new_freq = radio->freq;
+		new_freq = dr_getf(&radio->drs.dme.freq) * 10000;
 		break;
 	}
 #else	/* !USE_XPLANE_RADIO_DRS */
@@ -1813,6 +1817,10 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 	} else if (strongest != NULL) {
 		winner = strongest;
 	}
+	if (strongest != NULL)
+		radio->signal_db = strongest->signal_db;
+	else
+		radio->signal_db = NOISE_FLOOR_TOO_FAR;
 
 	mutex_exit(&radio->lock);
 
@@ -1820,16 +1828,19 @@ radio_get_strongest_navaid(radio_t *radio, avl_tree_t *tree,
 }
 
 static double
-signal_error(const navaid_t *nav, double signal_db)
+signal_db_upd_rate(double orig_rate, double signal_db)
 {
-	geo_pos3_t pos = navaid_get_pos(nav);
-	double pos_seed = crc64(&pos, sizeof (pos)) / (double)UINT64_MAX;
-	double time_seed = navrad.last_t / 3600.0;
-	double d_sig = signal_db - NOISE_FLOOR_SIGNAL;
-	double fact = pow(10, d_sig / 10);
-	double signal_seed = 1 / fact;
+	double d_sig = signal_db - NOISE_FLOOR_ERROR_RATE;
+	double div = pow(10, d_sig / 10);
+	return (orig_rate + (orig_rate * 20) / div);
+}
 
-	return (POW4(signal_seed) * sin(pos_seed + time_seed));
+static double
+signal_error(double signal_db)
+{
+	double d_sig = signal_db - NOISE_FLOOR_ERROR_RATE;
+	double div = pow(10, d_sig / 10);
+	return (crc64_rand_normal(1.0 / div));
 }
 
 static double
@@ -1895,7 +1906,7 @@ radio_get_bearing(radio_t *radio)
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
 	brg = brg2navaid(nav, NULL);
-	error = MAX_ERROR * signal_error(nav, rnav->signal_db) +
+	error = MAX_ERROR * signal_error(rnav->signal_db) +
 	    brg_cone_error(rnav);
 
 	return (normalize_hdg(brg + error));
@@ -1919,7 +1930,7 @@ radio_get_radial(radio_t *radio)
 		return (NAN);
 
 	radial = normalize_hdg(brg2navaid(nav, NULL) + 180);
-	error = MAX_ERROR * signal_error(nav, rnav->signal_db) +
+	error = MAX_ERROR * signal_error(rnav->signal_db) +
 	    brg_cone_error(rnav);
 
 	return (normalize_hdg(radial + error - nav->vor.magvar));
@@ -1934,7 +1945,7 @@ radio_get_dme(radio_t *radio)
 	const navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	vect3_t pos_3d;
 	geo_pos3_t pos;
-	const double MAX_ERROR = 0.025;
+	const double MAX_ERROR = 0.1;
 
 	if (nav == NULL ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
@@ -1947,7 +1958,7 @@ radio_get_dme(radio_t *radio)
 	pos_3d = geo2ecef_mtr(pos, &wgs84);
 	dist = vect3_abs(vect3_sub(pos_3d, nav->ecef));
 
-	error = dist * MAX_ERROR * signal_error(nav, rnav->signal_db);
+	error = dist * MAX_ERROR * signal_error(rnav->signal_db);
 
 	return (dist + error + nav->dme.bias);
 }
@@ -1968,7 +1979,7 @@ radio_comp_hdef_loc(radio_t *radio)
 	}
 	radio->loc_fcrs = nav->loc.brg;
 	brg = brg2navaid(nav, NULL);
-	error = MAX_ERROR * signal_error(nav, rnav->signal_db);
+	error = MAX_ERROR * signal_error(rnav->signal_db);
 	brg = normalize_hdg(brg + error);
 
 	hdef = rel_hdg(nav->loc.brg, brg);
@@ -2031,7 +2042,7 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 	} else {
 		hdef = radio_comp_hdef_vor(radio, pilot, &tofrom);
 	}
-
+#if	USE_XPLANE_RADIO_DRS
 	if (!isnan(hdef)) {
 		if (ABS(navrad.cur_t - radio->hdef_lock_t) <
 		    NAVRAD_LOCK_DELAY_VLOC)
@@ -2039,11 +2050,11 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 
 		if (pilot) {
 			FILTER_IN_NAN(radio->hdef_pilot, hdef, d_t,
-			    DEF_UPD_RATE);
+			    DEF_UPD_RATE(radio->signal_db));
 			radio->tofrom_pilot = tofrom;
 		} else {
 			FILTER_IN_NAN(radio->hdef_copilot, hdef, d_t,
-			    DEF_UPD_RATE);
+			    DEF_UPD_RATE(radio->signal_db));
 			radio->tofrom_copilot = tofrom;
 		}
 	} else {
@@ -2053,6 +2064,15 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 			radio->hdef_copilot = NAN;
 		radio->hdef_lock_t = NAN;
 	}
+#else	/* !USE_XPLANE_RADIO_DRS */
+	if (pilot) {
+		radio->hdef_pilot = hdef;
+		radio->tofrom_pilot = tofrom;
+	} else {
+		radio->hdef_copilot = hdef;
+		radio->tofrom_copilot = tofrom;
+	}
+#endif	/* !USE_XPLANE_RADIO_DRS */
 }
 
 static void
@@ -2121,7 +2141,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 		angle = 90;
 
 	signal_db += fx_lin_multi(ABS(angle), signal_angle_curve, B_TRUE);
-	error = MAX_ERROR * signal_error(nav, signal_db + 5);
+	error = MAX_ERROR * signal_error(signal_db + 5);
 	error += OFFPATH_MAX_ERROR *
 	    sin(nav->gs.brg + offpath / rand_coeffs[0]) *
 	    sin(nav->gs.brg + offpath / rand_coeffs[1]) *
@@ -2132,13 +2152,17 @@ radio_vdef_update(radio_t *radio, double d_t)
 	    1000.0;
 	vdef = ((angle_eff + error) - nav->gs.gs) * VDEF_GS_DEG_PER_DOT;
 
-	FILTER_IN_NAN(radio->vdef, vdef, d_t, DEF_UPD_RATE);
+#if	USE_XPLANE_RADIO_DRS
+	FILTER_IN_NAN(radio->vdef, vdef, d_t, DEF_UPD_RATE(signal_db));
 	radio->vdef = clamp(radio->vdef, -VDEF_MAX, VDEF_MAX);
 	radio->gs = nav->gs.gs;
 
 	FILTER_IN(radio->vdef_rate, (radio->vdef - radio->vdef_prev) / d_t,
-	    d_t, VDEF_RATE_UPD_RATE);
+	    d_t, VDEF_RATE_UPD_RATE(signal_db));
 	radio->vdef_prev = radio->vdef;
+#else	/* !USE_XPLANE_RADIO_DRS */
+	radio->vdef = vdef;
+#endif	/* !USE_XPLANE_RADIO_DRS */
 }
 
 static void
@@ -2151,6 +2175,7 @@ radio_brg_update(radio_t *radio, double d_t)
 	else
 		brg = radio_get_bearing(radio);
 
+#if	USE_XPLANE_RADIO_DRS
 	if (!isnan(brg)) {
 		double lock_delay = (radio->type == NAVRAD_TYPE_ADF ?
 		    NAVRAD_LOCK_DELAY_ADF : NAVRAD_LOCK_DELAY_VLOC);
@@ -2162,12 +2187,18 @@ radio_brg_update(radio_t *radio, double d_t)
 			radio->brg = NAVRAD_PARKED_BRG;
 		brg = normalize_hdg(brg - dr_getf(&drs.hdg));
 		tgt = radio->brg + rel_hdg(radio->brg, brg);
-		FILTER_IN(radio->brg, tgt, d_t, BRG_UPD_RATE);
+		FILTER_IN(radio->brg, tgt, d_t, BRG_UPD_RATE(radio->signal_db));
 		radio->brg = normalize_hdg(radio->brg);
 	} else {
 		radio->brg = NAN;
 		radio->brg_lock_t = navrad.cur_t;
 	}
+#else	/* !USE_XPLANE_RADIO_DRS */
+	if (!isnan(brg))
+		radio->brg = normalize_hdg(brg);
+	else
+		radio->brg = NAN;
+#endif	/* !USE_XPLANE_RADIO_DRS */
 }
 
 static void
@@ -2175,15 +2206,21 @@ radio_dme_update(radio_t *radio, double d_t)
 {
 	double dme = radio_get_dme(radio);
 
+#if	USE_XPLANE_RADIO_DRS
 	if (!isnan(dme)) {
 		if (ABS(navrad.cur_t - radio->dme_lock_t) <
 		    NAVRAD_LOCK_DELAY_VLOC)
 			return;
-		FILTER_IN_NAN(radio->dme, dme, d_t, DME_UPD_RATE);
+		FILTER_IN_NAN(radio->dme, dme, d_t,
+			DME_UPD_RATE(radio->signal_db));
 	} else {
 		radio->dme = NAN;
 		radio->dme_lock_t = navrad.cur_t;
 	}
+#else	/* !USE_XPLANE_RADIO_DRS */
+	UNUSED(d_t);
+	radio->dme = dme;
+#endif	/* !USE_XPLANE_RADIO_DRS */
 }
 
 static double
