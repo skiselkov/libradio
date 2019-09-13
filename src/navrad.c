@@ -2352,6 +2352,13 @@ navrad_set_freq(navrad_type_t type, unsigned nr, uint64_t freq)
 	radio->new_freq = freq;
 }
 
+void
+navrad_set_failed(navrad_type_t type, unsigned nr, bool_t flag)
+{
+	radio_t *radio = find_radio(type, nr);
+	radio->failed = flag;
+}
+
 uint64_t
 navrad_get_freq(navrad_type_t type, unsigned nr)
 {
