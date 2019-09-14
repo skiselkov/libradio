@@ -1838,11 +1838,11 @@ signal_db_upd_rate(double orig_rate, double signal_db)
 #endif	/* USE_XPLANE_RADIO_DRS */
 
 static double
-signal_error(double signal_db)
+signal_error(double signal_db, double min_sigma)
 {
 	double d_sig = signal_db - NOISE_FLOOR_ERROR_RATE;
 	double div = pow(10, d_sig / 10);
-	return (crc64_rand_normal(1.0 / div));
+	return (crc64_rand_normal(MAX(1.0 / div, min_sigma)));
 }
 
 static double
@@ -1908,7 +1908,7 @@ radio_get_bearing(radio_t *radio)
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
 	brg = brg2navaid(nav, NULL);
-	error = MAX_ERROR * signal_error(rnav->signal_db) +
+	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
 	    brg_cone_error(rnav);
 
 	return (normalize_hdg(brg + error));
@@ -1932,7 +1932,7 @@ radio_get_radial(radio_t *radio)
 		return (NAN);
 
 	radial = normalize_hdg(brg2navaid(nav, NULL) + 180);
-	error = MAX_ERROR * signal_error(rnav->signal_db) +
+	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
 	    brg_cone_error(rnav);
 
 	return (normalize_hdg(radial + error - nav->vor.magvar));
@@ -1947,7 +1947,24 @@ radio_get_dme(radio_t *radio)
 	const navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
 	vect3_t pos_3d;
 	geo_pos3_t pos;
-	const double MAX_ERROR = 0.1;
+	/*
+	 * The error calculation here is based on the bandwidth of the
+	 * DME signal (100 kHz). By the signal bandwidth -to- minimum
+	 * pulse width equation:
+	 *       1
+	 * BW = ---
+	 *       T
+	 * The minimum semi-period pulse width for DME is approximately
+	 * 10 us. Let's assume that the DME radio measures the arrival
+	 * time of the pulse's peak. Assuming random noise moving this
+	 * pulse around, we will simply assume that at almost noise
+	 * signal equivalence (+0 dB gain above noise), our pulse peak
+	 * can be incorrectly determined by up to one full pulse width.
+	 * The greater the gain vs noise, the lower this inaccuracy. So
+	 * by eyeballing the error rate, we'll set the base rate at 3000m
+	 * (approx distance light travels in 10us).
+	 */
+	const double MAX_ERROR = 3000;
 
 	if (nav == NULL ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
@@ -1960,7 +1977,7 @@ radio_get_dme(radio_t *radio)
 	pos_3d = geo2ecef_mtr(pos, &wgs84);
 	dist = vect3_abs(vect3_sub(pos_3d, nav->ecef));
 
-	error = dist * MAX_ERROR * signal_error(rnav->signal_db);
+	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005);
 
 	return (dist + error + nav->dme.bias);
 }
@@ -1981,7 +1998,7 @@ radio_comp_hdef_loc(radio_t *radio)
 	}
 	radio->loc_fcrs = nav->loc.brg;
 	brg = brg2navaid(nav, NULL);
-	error = MAX_ERROR * signal_error(rnav->signal_db);
+	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005);
 	brg = normalize_hdg(brg + error);
 
 	hdef = rel_hdg(nav->loc.brg, brg);
@@ -2144,7 +2161,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 		angle = 90;
 
 	signal_db += fx_lin_multi(ABS(angle), signal_angle_curve, B_TRUE);
-	error = MAX_ERROR * signal_error(signal_db + 5);
+	error = MAX_ERROR * signal_error(signal_db + 4, 0.005);
 	error += OFFPATH_MAX_ERROR *
 	    sin(nav->gs.brg + offpath / rand_coeffs[0]) *
 	    sin(nav->gs.brg + offpath / rand_coeffs[1]) *
