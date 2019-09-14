@@ -2422,6 +2422,28 @@ navrad_get_freq(navrad_type_t type, unsigned nr)
 }
 
 double
+navrad_get_signal_quality(navrad_type_t type, unsigned nr)
+{
+	radio_t *radio = find_radio(type, nr);
+	double delta_db, div;
+
+	if (radio->failed)
+		return (0);
+	/*
+	 * Derive the signal quality from the inverse of the logarithmic
+	 * signal level vs the noise floor. So that means at <= +0 dB from
+	 * the noise floor, we have a signal quality of 0%. At +10 dB,
+	 * quality is 90%. At +20 dB, quality is 99%, etc. This basically
+	 * linearizes the signal level, making it easier for callers to
+	 * calibrate things like Kalman filters.
+	 */
+	delta_db = radio->signal_db - NOISE_FLOOR_ERROR_RATE;
+	div = pow(10, delta_db / 10);
+
+	return (clamp(1.0 - 1.0 / div, 0.0, 1.0));
+}
+
+double
 navrad_get_bearing(navrad_type_t type, unsigned nr)
 {
 	radio_t *radio = find_radio(type, nr);

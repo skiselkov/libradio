@@ -57,6 +57,7 @@ void navrad_set_freq(navrad_type_t type, unsigned nr, uint64_t freq);
 void navrad_set_failed(navrad_type_t type, unsigned nr, bool_t flag);
 
 uint64_t navrad_get_freq(navrad_type_t type, unsigned nr);
+double navrad_get_signal_quality(navrad_type_t type, unsigned nr);
 double navrad_get_bearing(navrad_type_t type, unsigned nr);
 double navrad_get_dme(navrad_type_t type, unsigned nr);
 bool_t navrad_get_ID(navrad_type_t type, unsigned nr, char id[8]);
