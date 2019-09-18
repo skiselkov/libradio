@@ -2245,7 +2245,7 @@ radio_brg_update(radio_t *radio, double d_t)
 	double brg;
 
 	if (radio_adf_is_ant_mode(radio))
-		brg = NAVRAD_PARKED_BRG + dr_getf(&drs.hdg);
+		brg = NAVRAD_PARKED_BRG;
 	else
 		brg = radio_get_bearing(radio);
 
