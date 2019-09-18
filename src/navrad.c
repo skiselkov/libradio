@@ -13,7 +13,7 @@
  * CDDL HEADER END
 */
 /*
- * Copyright 2018 Saso Kiselkov. All rights reserved.
+ * Copyright 2019 Saso Kiselkov. All rights reserved.
  */
 
 #include <time.h>
@@ -306,6 +306,8 @@ static struct {
 	dr_t		sim_time;
 	dr_t		magvar;
 	dr_t		hdg;
+	dr_t		roll;
+	dr_t		pitch;
 
 #if	USE_XPLANE_RADIO_DRS
 	dr_t		ap_steer_deg_mag;
@@ -460,7 +462,7 @@ static const int16_t dme_tone[DME_TONE_NUM_SAMPLES] = {
     -32767
 };
 
-static double brg2navaid(const navaid_t *nav, double *dist);
+static double brg2navaid(const navaid_t *nav, double *dist, double *vert_angle);
 static double radio_get_hdef(radio_t *radio, bool_t pilot, bool_t *tofrom);
 static void radio_hdef_update(radio_t *radio, bool_t pilot, double d_t);
 static void radio_vdef_update(radio_t *radio, double d_t);
@@ -634,7 +636,7 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 				 * level (especially important for opposing
 				 * runways using the same ILS frequency!)
 				 */
-				double brg_fm_nav = brg2navaid(nav, NULL);
+				double brg_fm_nav = brg2navaid(nav, NULL, NULL);
 				double rbrg = fabs(rel_hdg(brg, brg_fm_nav));
 				if (has_bc) {
 					rnav->signal_db += fx_lin_multi(rbrg,
@@ -653,7 +655,7 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 	case NAVAID_GS: {
 		double crs = (nav->type == NAVAID_LOC ? nav->loc.brg :
 		    nav->gs.brg);
-		double brg_fm_nav = brg2navaid(nav, NULL);
+		double brg_fm_nav = brg2navaid(nav, NULL, NULL);
 		double rbrg = fabs(rel_hdg(crs, brg_fm_nav));
 		double signal_db = rnav->signal_db_omni;
 
@@ -1846,22 +1848,36 @@ signal_error(double signal_db, double min_sigma)
 }
 
 static double
-brg2navaid(const navaid_t *nav, double *dist)
+brg2navaid(const navaid_t *nav, double *dist, double *vert_angle)
 {
-	geo_pos2_t pos;
+	geo_pos3_t acf_pos;
 	geo_pos3_t nav_pos = navaid_get_pos(nav);
 	fpp_t fpp;
 	vect2_t v;
 
 	mutex_enter(&navrad.lock);
-	pos = GEO3_TO_GEO2(navrad.pos);
+	acf_pos = navrad.pos;
 	mutex_exit(&navrad.lock);
 
-	fpp = ortho_fpp_init(pos, 0, NULL, B_FALSE);
+	fpp = ortho_fpp_init(GEO3_TO_GEO2(acf_pos), 0, NULL, B_FALSE);
 	v = geo2fpp(GEO3_TO_GEO2(nav_pos), &fpp);
 
 	if (dist != NULL)
 		*dist = vect2_abs(v);
+	if (vert_angle != NULL) {
+		vect3_t acf_ecef = geo2ecef_mtr(acf_pos, &wgs84);
+		vect3_t nav_ecef = geo2ecef_mtr(nav_pos, &wgs84);
+		vect3_t acf2nav = vect3_sub(nav_ecef, acf_ecef);
+		vect3_t acf_uv = vect3_unit(acf_ecef, NULL);
+
+		if (!IS_ZERO_VECT3(acf2nav)) {
+			vect3_t acf2nav_uv = vect3_unit(acf2nav, NULL);
+			double cos_angle = vect3_dotprod(acf_uv, acf2nav_uv);
+			*vert_angle = 90 - RAD2DEG(acos(cos_angle));
+		} else {
+			*vert_angle = 0;
+		}
+	}
 
 	return (dir2hdg(v));
 }
@@ -1887,10 +1903,9 @@ brg_cone_error(radio_navaid_t *rnav)
 static double
 radio_get_bearing(radio_t *radio)
 {
-	double brg, error;
+	double error, true_brg, vert_angle;
 	const navaid_t *nav;
 	radio_navaid_t *rnav;
-	enum { MAX_ERROR = 3 };
 
 	ASSERT(radio->type == NAVRAD_TYPE_VLOC ||
 	    radio->type == NAVRAD_TYPE_ADF);
@@ -1907,11 +1922,49 @@ radio_get_bearing(radio_t *radio)
 	if (nav == NULL || nav->type == NAVAID_LOC ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
-	brg = brg2navaid(nav, NULL);
-	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
-	    brg_cone_error(rnav);
+	true_brg = brg2navaid(nav, NULL, &vert_angle);
 
-	return (normalize_hdg(brg + error));
+	if (radio->type != NAVRAD_TYPE_ADF) {
+		enum { MAX_ERROR = 5 };
+		error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
+		    brg_cone_error(rnav);
+		return (normalize_hdg(true_brg + error));
+	} else {
+		/*
+		 * ADFs operate in relative bearing mode. We also need
+		 * take taking into account relative station height and
+		 * aircraft roll & pitch. So w convert the absolute bearing
+		 * to a 3D vector, then rotate according to station relative
+		 * position, aircraft pitch & roll to figureout the angle
+		 * that would show on a relative bearing indicator.
+		 */
+		/* X is right, Y is up and Z is BACKWARD */
+		vect3_t v = VECT3(0, 0, -1);
+		vect2_t v2;
+		double rel_brg, signal_drop;
+		enum { MAX_ERROR = 25 };
+
+		v = vect3_rot(v, -vert_angle, 0);
+		v = vect3_rot(v, true_brg - dr_getf(&drs.hdg), 1);
+		v = vect3_rot(v, dr_getf(&drs.pitch), 0);
+		v = vect3_rot(v, -dr_getf(&drs.roll), 2);
+		v2 = VECT2(v.x, -v.z);
+
+		if (IS_ZERO_VECT2(v2))
+			return (90);
+
+		rel_brg = dir2hdg(v2);
+		/*
+		 * We will assume that the signal level drop due to being
+		 * off-angle from our direct side is proportional to the
+		 * remaining on-side component.
+		 */
+		signal_drop = log(vect2_abs(v2)) * 10;
+		error = MAX_ERROR * signal_error(rnav->signal_db + signal_drop,
+		    0.005) + brg_cone_error(rnav);
+
+		return (rel_brg + error);
+	}
 }
 
 static double
@@ -1931,7 +1984,7 @@ radio_get_radial(radio_t *radio)
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
 
-	radial = normalize_hdg(brg2navaid(nav, NULL) + 180);
+	radial = normalize_hdg(brg2navaid(nav, NULL, NULL) + 180);
 	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
 	    brg_cone_error(rnav);
 
@@ -1997,7 +2050,7 @@ radio_comp_hdef_loc(radio_t *radio)
 		return (NAN);
 	}
 	radio->loc_fcrs = nav->loc.brg;
-	brg = brg2navaid(nav, NULL);
+	brg = brg2navaid(nav, NULL, NULL);
 	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005);
 	brg = normalize_hdg(brg + error);
 
@@ -2131,7 +2184,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY_VLOC)
 		return;
 
-	brg = brg2navaid(nav, &dist);
+	brg = brg2navaid(nav, &dist, NULL);
 	offpath = fabs(rel_hdg(brg, nav->gs.brg));
 	long_dist = dist * cos(DEG2RAD(offpath));
 	if (long_dist >= DB_ELEV_DIST) {
@@ -2314,6 +2367,8 @@ navrad_init2(navaiddb_t *db, unsigned num_dmes)
 	fdr_find(&drs.sim_time, "sim/time/total_running_time_sec");
 	fdr_find(&drs.magvar, "sim/flightmodel/position/magnetic_variation");
 	fdr_find(&drs.hdg, "sim/flightmodel/position/psi");
+	fdr_find(&drs.roll, "sim/flightmodel/position/phi");
+	fdr_find(&drs.pitch, "sim/flightmodel/position/theta");
 
 #if	USE_XPLANE_RADIO_DRS
 	fdr_find(&drs.ap_steer_deg_mag,
