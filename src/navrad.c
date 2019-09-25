@@ -2001,23 +2001,15 @@ radio_get_dme(radio_t *radio)
 	vect3_t pos_3d;
 	geo_pos3_t pos;
 	/*
-	 * The error calculation here is based on the bandwidth of the
-	 * DME signal (100 kHz). By the signal bandwidth -to- minimum
-	 * pulse width equation:
-	 *       1
-	 * BW = ---
-	 *       T
-	 * The minimum semi-period pulse width for DME is approximately
-	 * 10 us. Let's assume that the DME radio measures the arrival
-	 * time of the pulse's peak. Assuming random noise moving this
-	 * pulse around, we will simply assume that at almost noise
-	 * signal equivalence (+0 dB gain above noise), our pulse peak
-	 * can be incorrectly determined by up to one full pulse width.
-	 * The greater the gain vs noise, the lower this inaccuracy. So
-	 * by eyeballing the error rate, we'll set the base rate at 3000m
-	 * (approx distance light travels in 10us).
+	 * DME pulse width is set at 3.5 us (500 kHz bandwidth). Assuming
+	 * random noise moving this pulse around, we will simply assume
+	 * that at almost noise signal equivalence (+0 dB gain above noise),
+	 * our pulse peak can be incorrectly determined by up to one full
+	 * pulse width. The greater the gain vs noise, the lower this
+	 * inaccuracy. So by eyeballing the error rate, we'll set the base
+	 * rate at 1000m (approx distance light travels in ~3.5 us).
 	 */
-	const double MAX_ERROR = 3000;
+	const double MAX_ERROR = 1000;
 
 	if (nav == NULL ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
