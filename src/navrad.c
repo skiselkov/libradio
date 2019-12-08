@@ -2358,9 +2358,9 @@ navrad_init2(navaiddb_t *db, unsigned num_dmes)
 	fdr_find(&drs.elev, "sim/flightmodel/position/elevation");
 	fdr_find(&drs.sim_time, "sim/time/total_running_time_sec");
 	fdr_find(&drs.magvar, "sim/flightmodel/position/magnetic_variation");
-	fdr_find(&drs.hdg, "sim/flightmodel/position/psi");
-	fdr_find(&drs.roll, "sim/flightmodel/position/phi");
-	fdr_find(&drs.pitch, "sim/flightmodel/position/theta");
+	fdr_find(&drs.hdg, "sim/flightmodel/position/true_psi");
+	fdr_find(&drs.roll, "sim/flightmodel/position/true_phi");
+	fdr_find(&drs.pitch, "sim/flightmodel/position/true_theta");
 
 #if	USE_XPLANE_RADIO_DRS
 	fdr_find(&drs.ap_steer_deg_mag,
