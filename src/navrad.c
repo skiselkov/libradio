@@ -2251,7 +2251,10 @@ radio_brg_update(radio_t *radio, double d_t)
 			return;
 		if (isnan(radio->brg))
 			radio->brg = NAVRAD_PARKED_BRG;
-		brg = normalize_hdg(brg - dr_getf(&drs.hdg));
+		if (radio->type != NAVRAD_TYPE_ADF)
+			brg = normalize_hdg(brg - dr_getf(&drs.hdg));
+		else
+			brg = normalize_hdg(brg);
 		tgt = radio->brg + rel_hdg(radio->brg, brg);
 		FILTER_IN(radio->brg, tgt, d_t, BRG_UPD_RATE(radio->signal_db));
 		radio->brg = normalize_hdg(radio->brg);
