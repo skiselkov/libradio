@@ -424,6 +424,7 @@ static double avar(struct state &state, double zzt, double zzl, double zzc,
         state.cfp1 = bfp1[temp_klim];
         state.cfp2 = bfp2[temp_klim];
         state.cfp3 = bfp3[temp_klim];
+        /* FALLTHROUGH */
       case 4:
         state.kdv = propv.mdvar;
         state.ws = state.kdv >= 20;
@@ -436,13 +437,16 @@ static double avar(struct state &state, double zzt, double zzl, double zzc,
           state.kdv = 0;
           prop.kwx = mymax(prop.kwx, 2);
         }
+        /* FALLTHROUGH */
       case 3:
         q = log(0.133 * prop.wn);
         state.gm = state.cfm1 + state.cfm2 / (pow(state.cfm3 * q, 2.0) + 1.0);
         state.gp = state.cfp1 + state.cfp2 / (pow(state.cfp3 * q, 2.0) + 1.0);
+        /* FALLTHROUGH */
       case 2:
         state.dexa = sqrt(18e6 * prop.he[0]) + sqrt(18e6 * prop.he[1]) +
                pow((575.7e12 / prop.wn), THIRD);
+        /* FALLTHROUGH */
       case 1:
         if (prop.dist < state.dexa)
           state.de = 130e3 * prop.dist / state.dexa;
