@@ -69,10 +69,10 @@ typedef enum {
 	LTP_PROV_GP
 } ltp_prov_t;
 
-#define	NAVAIDDB_ID_LEN		8
-#define	NAVAIDDB_ICAO_LEN		8
+#define	NAVAIDDB_ID_LEN		12
+#define	NAVAIDDB_ICAO_LEN	8
 #define	NAVAIDDB_REGION_LEN	8
-#define	NAVAIDDB_NAME_LEN		32
+#define	NAVAIDDB_NAME_LEN	32
 
 typedef struct {
 	/*

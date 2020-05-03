@@ -17,6 +17,7 @@
  */
 
 #include <errno.h>
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -353,6 +354,7 @@ parse_fpap(char **comps, size_t n_comps, navaid_t **nav_pp)
 		free(nav);
 		return (B_FALSE);
 	}
+	snprintf(nav->id, sizeof (nav->id), "%s/%s", comps[8], comps[7]);
 	strlcpy(nav->fpap.proc_id, comps[7], sizeof (nav->fpap.proc_id));
 	strlcpy(nav->fpap.rwy_id, comps[10], sizeof (nav->fpap.rwy_id));
 
@@ -408,6 +410,7 @@ parse_ltp_gls(char **comps, size_t n_comps, navaid_t **nav_pp)
 		free(nav);
 		return (B_FALSE);
 	}
+	snprintf(nav->id, sizeof (nav->id), "%s/%s", comps[8], comps[7]);
 	if (is_ltp) {
 		strlcpy(nav->ltp.proc_id, comps[7], sizeof (nav->ltp.proc_id));
 		strlcpy(nav->ltp.rwy_id, comps[10], sizeof (nav->ltp.rwy_id));
@@ -576,8 +579,16 @@ replace_arpt_navaid_duplicate(navaiddb_t *db, navaid_t *nav)
 	htbl_set(&db->by_arpt, &nav->type, nav);
 }
 
+/*
+ * Parses an earth_nav.dat file.
+ * If `replace_freq' is true, if a duplicate navaid is found, we overwrite
+ * its frequency with what we've read. This is to deal with the dickish
+ * situation with hand-placed localizers, which override a localizer's
+ * position but NOT its frequency. The frequencies are primarily in Custom
+ * Data take priority.
+ */
 static bool_t
-parse_earth_nav(navaiddb_t *db, const char *filename)
+parse_earth_nav(navaiddb_t *db, const char *filename, bool_t replace_freq)
 {
 	FILE *fp = fopen(filename, "rb");
 	int version = 0;
@@ -611,19 +622,31 @@ parse_earth_nav(navaiddb_t *db, const char *filename)
 			continue;
 
 		if (nav != NULL) {
+			navaid_t *other_nav;
 			avl_index_t where_id, where_lat, where_lon;
-
-			if (avl_find(&db->by_id, nav, &where_id) != NULL ||
-			    avl_find(&db->lat, nav, &where_lat) != NULL ||
-			    avl_find(&db->lon, nav, &where_lon) != NULL) {
+			/*
+			 * Due to airport naming and region naming
+			 * inconsistencies, we might not find the
+			 * navaid duplicated in the by-id database.
+			 * So use the positional exclusion system
+			 * as well. It's dumb, but those guys can
+			 * go fix their database entries themselves.
+			 */
+			other_nav = avl_find(&db->by_id, nav, &where_id);
+			if (other_nav == NULL)
+				other_nav = avl_find(&db->lat, nav, &where_lat);
+			if (other_nav == NULL)
+				other_nav = avl_find(&db->lon, nav, &where_lon);
+			if (other_nav != NULL) {
 				/*
-				 * Due to airport naming and region naming
-				 * inconsistencies, we might not find the
-				 * navaid duplicated in the by-id database.
-				 * So use the positional exclusion system
-				 * as well. It's dumb, but those guys can
-				 * go fix their database entries themselves.
+				 * Because of how garbage the X-Plane navaid
+				 * database is, there can be localizers in the
+				 * hand-placed localizer list with BAD freq's.
+				 * So to work around that, we replace their
+				 * frequencies from the navdata.
 				 */
+				if (replace_freq)
+					other_nav->freq = nav->freq;
 				free(nav);
 				continue;
 			}
@@ -654,6 +677,7 @@ navaiddb_create(const char *xpdir, airportdb_t *adb)
 	navaiddb_t *db = safe_calloc(1, sizeof (*db));
 	char *path;
 	bool_t parse_default = B_TRUE;
+	bool_t is_dir;
 
 	list_create(&db->navaids, sizeof (navaid_t), offsetof(navaid_t, node));
 	avl_create(&db->lat, lat_compar,
@@ -680,29 +704,29 @@ navaiddb_create(const char *xpdir, airportdb_t *adb)
 	 * First come the user's hand-placed navaids.
 	 */
 	path = mkpathname(xpdir, "Custom Data", "user_nav.dat", NULL);
-	if (file_exists(path, NULL))
-		parse_earth_nav(db, path);
+	if (file_exists(path, &is_dir) && !is_dir)
+		parse_earth_nav(db, path, B_FALSE);
 	lacf_free(path);
 	/*
 	 * Next come the hand-placed localizers from the scenery gateway.
 	 */
 	path = mkpathname(xpdir, "Custom Scenery", "Global Airports",
 	    "Earth nav data", "earth_nav.dat", NULL);
-	if (file_exists(path, NULL))
-		parse_earth_nav(db, path);
+	if (file_exists(path, &is_dir) && !is_dir)
+		parse_earth_nav(db, path, B_FALSE);
 	lacf_free(path);
 	/*
 	 * Next try the custom data from data providers. If those exist,
 	 * don't attempt to load the old data from X-Plane stock.
 	 */
 	path = mkpathname(xpdir, "Custom Data", "earth_nav.dat", NULL);
-	if (file_exists(path, NULL))
-		parse_default = !parse_earth_nav(db, path);
+	if (file_exists(path, &is_dir) && !is_dir)
+		parse_default = !parse_earth_nav(db, path, B_TRUE);
 	lacf_free(path);
 	if (parse_default) {
 		path = mkpathname(xpdir, "Resources", "default data",
 		    "earth_nav.dat", NULL);
-		if (!parse_earth_nav(db, path)) {
+		if (!parse_earth_nav(db, path, B_TRUE)) {
 			/* No usable navaid source */
 			lacf_free(path);
 			navaiddb_destroy(db);
