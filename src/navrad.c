@@ -41,7 +41,7 @@
 #define	USE_XPLANE_RADIO_DRS	1
 #endif
 
-#define	WORKER_INTVAL		500000
+#define	WORKER_INTVAL		250000
 #define	DEF_UPD_RATE(signal_db)	signal_db_upd_rate(1, (signal_db))
 #define	MIN_DELTA_T		0.01
 #define	NAVAID_SRCH_RANGE	NM2MET(300)
@@ -58,7 +58,7 @@
 #define	HDEF_MAX_XP		2.5	/* dots */
 #define	VDEF_MAX		2.5	/* dots */
 #define	HDEF_VOR_DEG_PER_DOT	2.0	/* degrees per dot */
-#define	HDEF_LOC_DEG_PER_DOT	1.0	/* degrees per dot */
+#define	HDEF_LOC_DDM_PER_DOT	0.0775	/* degrees per dot */
 #define	VDEF_GS_DEG_PER_DOT	3.5714	/* degrees per dot */
 #define	HSENS_VOR		12.0	/* dot deflection per deg correction */
 #define	HSENS_LOC		12.0	/* dot deflection per deg correction */
@@ -184,6 +184,7 @@ struct radio_s {
 	bool_t		tofrom_pilot;
 	double		hdef_copilot;
 	bool_t		tofrom_copilot;
+	double		loc_ddm;
 	double		hdef_lock_t;
 	double		gs;
 	distort_t	*distort_vloc;
@@ -200,6 +201,7 @@ struct radio_s {
 	double		signal_db;
 
 	double		vdef;
+	double		gp_ddm;
 	double		vdef_prev;
 	double		vdef_rate;
 	double		vdef_lock_t;
@@ -2028,33 +2030,97 @@ radio_get_dme(radio_t *radio)
 }
 
 static double
-radio_comp_hdef_loc(radio_t *radio)
+radio_comp_hdef_loc(radio_t *radio, double *ddm_p)
 {
+	vect2_t distort_amplitude[] = {
+	    VECT2(0, 0),
+	    VECT2(0, 0),	/* X will be set to sector_width_deg */
+	    VECT2(10, 0.02),
+	    VECT2(45, 0.25),
+	    VECT2(90, 0.25),
+	    NULL_VECT2		/* list terminator */
+	};
 	radio_navaid_t *rnav = radio_get_strongest_navaid(radio, &radio->vlocs,
 	    NOISE_FLOOR_AUDIO);
 	const navaid_t *nav = (rnav != NULL ? rnav->navaid : NULL);
-	const double MAX_ERROR = 0.5;
-	double brg, error, hdef;
+	const double MAX_ERROR = 0.1;
+	double nav_brg, sig_err, angdev, ddm, sector_width_deg, seed;
+	double distort, r_outside;
+	double angdev_outside, ddm_per_deg_inner, ddm_per_deg_outer;
 
-	if (nav == NULL ||
+	/*
+	 * radio->vlocs contains VORs mixed in with LOCs, so we need to make
+	 * sure radio_get_strongest_navaid returned a LOC. If it didn't,
+	 * we need to wait for the signal level recalculation to take place
+	 * and compute a new signal level.
+	 */
+	if (nav == NULL || nav->type != NAVAID_LOC ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY) {
 		radio->loc_fcrs = NAN;
+		if (ddm_p != NULL)
+			*ddm_p = NAN;
 		return (NAN);
 	}
 	radio->loc_fcrs = nav->loc.brg;
-	brg = brg2navaid(nav, NULL, NULL);
-	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005);
-	brg = normalize_hdg(brg + error);
+	nav_brg = brg2navaid(nav, NULL, NULL);
+	angdev = rel_hdg(nav->loc.brg, nav_brg);
 
-	hdef = rel_hdg(nav->loc.brg, brg);
 	/* simulate reverse sensing for the back-course */
-	if (hdef > 90)
-		hdef = 180 - hdef;
-	else if (hdef < -90)
-		hdef = -180 - hdef;
-	hdef /= HDEF_LOC_DEG_PER_DOT;
+	if (angdev > 90)
+		angdev = 180 - angdev;
+	else if (angdev < -90)
+		angdev = -180 - angdev;
 
-	return (hdef);
+	/*
+	 * We construct the DDM value as follows:
+	 * 1) Within the course sector (which is defined by the localizer's
+	 *    reference datum distance) we simply vary the DDM from 0.0 to
+	 *    0.155 as a function of the relative bearing from the localizer's
+	 *    front course.
+	 * 2) Outside of the course sector, we gradually alter the
+	 *    DDM-per-degrees value as a function of angular distance from
+	 *    the course sector, blending it between the in-course-sector
+	 *    value and 0.155 / 6 degrees outside of a 6 degree veil outside
+	 *    of the course sector. This then gets added on top of the 0.155
+	 *    value from inside the course sector.
+	 * 3) Outside of the course sector, we also start adding a sinusoidal
+	 *    random distortion pattern. The seed for this sine function is
+	 *    generated from the LOC facility ID, so it'll remain constant
+	 *    for a facility.
+	 * 4) Finally, we add a random signal_error value generate when the
+	 *    signal reception level becomes very low.
+	 */
+	ASSERT(nav->loc.ref_datum_dist != 0);
+	sector_width_deg = RAD2DEG(atan(106.9 / nav->loc.ref_datum_dist));
+	distort_amplitude[1].x = sector_width_deg;
+	sig_err = MAX_ERROR * signal_error(rnav->signal_db, 0.005);
+	seed = crc64(nav->id, sizeof (nav->id)) & 255;
+	distort = (sin(0.87 * angdev + seed) + sin(angdev + seed) +
+	    sin(1.89 * angdev + seed)) *
+	    fx_lin_multi(ABS(angdev), distort_amplitude, B_TRUE);
+	/* This is the amount of degrees we are outside of the course sector */
+	if (angdev >= 0)
+		angdev_outside = MAX(angdev - sector_width_deg, 0);
+	else
+		angdev_outside = MIN(angdev + sector_width_deg, 0);
+	/* DDM per deg inside of sector */
+	ddm_per_deg_inner = 0.155 / sector_width_deg;
+	/* DDM per deg outside of sector width + 8 degrees */
+	ddm_per_deg_outer = 0.155 / 8;
+	/*
+	 * Ratio of how far we are outside of the sector width.
+	 * This is used for DDM-per-deg blending outside of the sector.
+	 */
+	r_outside = iter_fract(ABS(angdev_outside), 0, 8, B_TRUE);
+	ddm = sig_err + clamp(angdev, -sector_width_deg, sector_width_deg) *
+	    ddm_per_deg_inner + distort +
+	    (angdev_outside * wavg(ddm_per_deg_inner,
+	    ddm_per_deg_outer, r_outside));
+	ddm = clamp(ddm, -1, 1);
+	if (ddm_p != NULL)
+		*ddm_p = ddm;
+
+	return (ddm / HDEF_LOC_DDM_PER_DOT);
 }
 
 static double
@@ -2101,10 +2167,11 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
 
 	if (is_valid_loc_freq(radio->freq / 1000000.0)) {
-		hdef = radio_comp_hdef_loc(radio);
+		hdef = radio_comp_hdef_loc(radio, &radio->loc_ddm);
 		tofrom = B_FALSE;
 	} else {
 		hdef = radio_comp_hdef_vor(radio, pilot, &tofrom);
+		radio->loc_ddm = NAN;
 	}
 #if	USE_XPLANE_RADIO_DRS
 	if (!isnan(hdef)) {
@@ -2145,8 +2212,8 @@ radio_vdef_update(radio_t *radio, double d_t)
 {
 	radio_navaid_t *rnav;
 	const navaid_t *nav;
-	double signal_db, offpath;
-	double brg, dist, long_dist, d_elev, angle, vdef, error, angle_eff;
+	double signal_db, offpath, brg, dist, long_dist, d_elev, angle;
+	double vdef_deg, vdef_dots, ddm_per_deg, error, angle_eff;
 	const double MAX_ERROR = 0.5, OFFPATH_MAX_ERROR = 4.0;
 	const double rand_coeffs[] = { M_PI, 2.12, 12.28, 35.12, 75.21 };
 	const vect2_t signal_angle_curve[] = {
@@ -2168,10 +2235,12 @@ radio_vdef_update(radio_t *radio, double d_t)
 	signal_db = (rnav != NULL ? rnav->signal_db : 0);
 	if (nav == NULL) {
 		radio->vdef = NAN;
+		radio->gp_ddm = NAN;
 		radio->gs = NAN;
 		radio->vdef_lock_t = navrad.cur_t;
 		return;
 	}
+	ASSERT3U(nav->type, ==, NAVAID_GS);
 
 	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY_VLOC)
 		return;
@@ -2215,10 +2284,25 @@ radio_vdef_update(radio_t *radio, double d_t)
 
 	angle_eff = (((int)(angle * 1000)) % ((int)(nav->gs.gs * 2 * 1000))) /
 	    1000.0;
-	vdef = ((angle_eff + error) - nav->gs.gs) * VDEF_GS_DEG_PER_DOT;
+	vdef_deg = (angle_eff + error) - nav->gs.gs;
+	vdef_dots = vdef_deg * VDEF_GS_DEG_PER_DOT;
+	/*
+	 * ICAO Annex 10 specifies:
+	 * 1) For Facility Performance Category I. ILS glide paths, the nominal
+	 *    angular displacement sensitivity shall correspond to a DDM of
+	 *    0.0875 at angular displacements above and below the glide path
+	 *    between 0.07 and 0.14 theta (theta = gs angle)
+	 * 2) For Cat II and Cat III facilities, a DDM of 0.0875 at
+	 *    displacements above and below the glide path of 0.12 theta.
+	 * Outside of these ranges, the deviations can behave in a non-linear
+	 * fashion, but for simplicity, we assume they mostly are linear. Also,
+	 * 0.0875 DDM per 0.12 theta seems like a reasonable ballpark number.
+	 */
+	ddm_per_deg = (0.12 * nav->gs.gs) / 0.0875;
+	radio->gp_ddm = vdef_deg / ddm_per_deg;
 
 #if	USE_XPLANE_RADIO_DRS
-	FILTER_IN_NAN(radio->vdef, vdef, d_t, DEF_UPD_RATE(signal_db));
+	FILTER_IN_NAN(radio->vdef, vdef_dots, d_t, DEF_UPD_RATE(signal_db));
 	radio->vdef = clamp(radio->vdef, -VDEF_MAX, VDEF_MAX);
 	radio->gs = nav->gs.gs;
 
@@ -2227,7 +2311,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 	radio->vdef_prev = radio->vdef;
 #else	/* !USE_XPLANE_RADIO_DRS */
 	UNUSED(d_t);
-	radio->vdef = vdef;
+	radio->vdef = vdef_dots;
 #endif	/* !USE_XPLANE_RADIO_DRS */
 }
 
@@ -2564,12 +2648,30 @@ navrad_get_hdef(unsigned nr, bool_t pilot, bool_t *tofrom)
 }
 
 double
+navrad_get_loc_ddm(unsigned nr)
+{
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.vloc_radios[nr].failed)
+		return (NAN);
+	return (navrad.vloc_radios[nr].loc_ddm);
+}
+
+double
 navrad_get_vdef(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
 	if (navrad.vloc_radios[nr].failed)
 		return (NAN);
 	return (navrad.vloc_radios[nr].vdef);
+}
+
+double
+navrad_get_gp_ddm(unsigned nr)
+{
+	ASSERT3U(nr, <, NUM_NAV_RADIOS);
+	if (navrad.vloc_radios[nr].failed)
+		return (NAN);
+	return (navrad.vloc_radios[nr].gp_ddm);
 }
 
 double

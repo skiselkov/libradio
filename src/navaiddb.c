@@ -257,6 +257,13 @@ parse_loc(char **comps, size_t n_comps, navaid_t **nav_pp)
 		free(nav);
 		return (B_FALSE);
 	}
+	/*
+	 * Best effort guess for now. Localizers with an associated runway
+	 * will recalculate the actual reference datum distance in
+	 * loc_align_with_rwy. 2450m reference datum yields a course sector
+	 * angle of 2.5 degrees, which is about okay'ish for most purposes.
+	 */
+	nav->loc.ref_datum_dist = 2450;
 	strlcpy(nav->loc.rwy_id, comps[10], sizeof (nav->loc.rwy_id));
 
 	*nav_pp = nav;
@@ -864,6 +871,10 @@ loc_align_with_rwy(navaiddb_t *db, navaid_t *nav)
 	ASSERT3U(nav->type, ==, NAVAID_LOC);
 	ASSERT(!nav->loc.rwy_align_done);
 
+	if (strcmp(nav->icao, "ENRT") == 0) {
+		nav->loc.rwy_align_done = B_TRUE;
+		return;
+	}
 	arpt = airport_lookup_global(db->adb, nav->icao);
 	/* Correct the navaid bearing to the runway true heading. */
 	if (arpt != NULL &&
@@ -882,6 +893,17 @@ loc_align_with_rwy(navaiddb_t *db, navaid_t *nav)
 		p = fpp2geo(c, &fpp);
 		nav->loc.corr_pos = GEO_POS3(p.lat, p.lon, nav->pos.elev);
 		nav->loc.brg = dir2hdg(thr2thr_v);
+		/*
+		 * The distance from the localizer to the ILS reference datum
+		 * (which we define as the runway threshold).
+		 */
+		nav->loc.ref_datum_dist = vect2_abs(nav_v);
+		/*
+		 * atan(106.9m / 1017m) = 6 degrees
+		 * ICAO Annex 10 defines this as the maximum course sector
+		 * width, so we clamp the reference datum distance at that.
+		 */
+		nav->loc.ref_datum_dist = MAX(nav->loc.ref_datum_dist, 1017);
 	} else {
 		nav->loc.corr_pos = nav->pos;
 	}

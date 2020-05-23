@@ -104,6 +104,7 @@ typedef struct {
 		} vor;
 		struct {
 			double		brg;		/* degrees */
+			double		ref_datum_dist;	/* meters */
 			char		rwy_id[8];
 			geo_pos3_t	corr_pos;
 			bool_t		rwy_align_done;
