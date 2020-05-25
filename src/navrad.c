@@ -76,7 +76,7 @@
 #define	VOR_BUF_NUM_SAMPLES	4800
 #define	DME_BUF_NUM_SAMPLES	4788
 
-#define	DME_CHG_DELAY		1	/* seconds */
+#define	DME_CHG_DELAY		0.2	/* seconds */
 #define	NAVRAD_LOCK_DELAY_VLOC	1	/* seconds */
 #define	NAVRAD_LOCK_DELAY_DME	0.2	/* seconds */
 #define	NAVRAD_LOCK_DELAY_ADF	0.75	/* seconds */
