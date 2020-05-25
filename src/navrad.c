@@ -76,20 +76,11 @@
 #define	VOR_BUF_NUM_SAMPLES	4800
 #define	DME_BUF_NUM_SAMPLES	4788
 
-#if	USE_XPLANE_RADIO_DRS
 #define	DME_CHG_DELAY		1	/* seconds */
-#define	NAVRAD_LOCK_DELAY_VLOC	2	/* seconds */
-#define	NAVRAD_LOCK_DELAY_ADF	1	/* seconds */
-#else	/* !USE_XPLANE_RADIO_DRS */
-/*
- * In non-X-Plane radio mode, start providing the tuned outputs
- * immediately. The custom radio code will figure out the proper
- * signal tuning delays.
- */
-#define	DME_CHG_DELAY		0	/* seconds */
-#define	NAVRAD_LOCK_DELAY_VLOC	0	/* seconds */
-#define	NAVRAD_LOCK_DELAY_ADF	0	/* seconds */
-#endif	/* !USE_XPLANE_RADIO_DRS */
+#define	NAVRAD_LOCK_DELAY_VLOC	1	/* seconds */
+#define	NAVRAD_LOCK_DELAY_DME	0.2	/* seconds */
+#define	NAVRAD_LOCK_DELAY_ADF	0.75	/* seconds */
+
 #define	NAVRAD_PARKED_BRG	90	/* bearing pointer parked pos */
 
 #define	MAX_DR_VALS		8
@@ -1985,8 +1976,10 @@ radio_get_radial(radio_t *radio)
 	    NOISE_FLOOR_AUDIO);
 	nav = (rnav != NULL ? rnav->navaid : NULL);
 	if (nav == NULL || nav->type == NAVAID_LOC ||
-	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
+	    nav->freq != radio->freq ||
+	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY) {
 		return (NAN);
+	}
 
 	radial = normalize_hdg(brg2navaid(nav, NULL, NULL) + 180);
 	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
@@ -2015,7 +2008,7 @@ radio_get_dme(radio_t *radio)
 	 */
 	const double MAX_ERROR = 1000;
 
-	if (nav == NULL ||
+	if (nav == NULL || nav->freq != radio->freq ||
 	    ABS(navrad.cur_t - radio->freq_chg_t) < DME_CHG_DELAY)
 		return (NAN);
 
@@ -2365,7 +2358,7 @@ radio_dme_update(radio_t *radio, double d_t)
 #if	USE_XPLANE_RADIO_DRS
 	if (!isnan(dme)) {
 		if (ABS(navrad.cur_t - radio->dme_lock_t) <
-		    NAVRAD_LOCK_DELAY_VLOC)
+		    NAVRAD_LOCK_DELAY_DME)
 			return;
 		FILTER_IN_NAN(radio->dme, dme, d_t,
 			DME_UPD_RATE(radio->signal_db));
@@ -2623,10 +2616,11 @@ navrad_set_obs(unsigned nr, double obs)
 double
 navrad_get_radial(unsigned nr)
 {
+	radio_t *radio = find_radio(NAVRAD_TYPE_VLOC, nr);
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
-	if (navrad.vloc_radios[nr].failed)
+	if (radio->failed || radio->freq != radio->new_freq)
 		return (NAN);
-	return (radio_get_radial(&navrad.vloc_radios[nr]));
+	return (radio_get_radial(radio));
 }
 
 double
@@ -2635,9 +2629,9 @@ navrad_get_dme(navrad_type_t type, unsigned nr)
 	radio_t *radio = find_radio(type, nr);
 	ASSERT(radio->type == NAVRAD_TYPE_VLOC ||
 	    radio->type == NAVRAD_TYPE_DME);
-	if (radio->failed)
+	if (radio->failed || radio->freq != radio->new_freq)
 		return (NAN);
-	return (radio->dme);
+	return (radio_get_dme(radio));
 }
 
 double
