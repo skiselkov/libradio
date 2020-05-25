@@ -180,6 +180,7 @@ struct radio_s {
 	uint64_t	freq;
 	uint64_t	new_freq;
 	double		freq_chg_t;
+	double		ident_delay;
 	double		hdef_pilot;
 	bool_t		tofrom_pilot;
 	double		hdef_copilot;
@@ -1018,6 +1019,7 @@ radio_floop_cb(radio_t *radio, double d_t)
 	if (radio->freq != new_freq) {
 		radio->freq = new_freq;
 		radio->freq_chg_t = navrad.cur_t;
+		radio->ident_delay = wavg(5, 10, crc64_rand_fract());
 	}
 
 	switch (radio->type) {
@@ -2721,6 +2723,11 @@ navrad_get_ID(navrad_type_t type, unsigned nr, char id[8])
 	radio_navaid_t *rnav;
 
 	if (radio->failed)
+		return (B_FALSE);
+	/*
+	 * Simulate a variable time delay before we ID a station.
+	 */
+	if (navrad.cur_t < radio->freq_chg_t + radio->ident_delay)
 		return (B_FALSE);
 
 	mutex_enter(&radio->lock);
