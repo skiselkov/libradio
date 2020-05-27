@@ -2294,7 +2294,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 	 * 0.0875 DDM per 0.12 theta seems like a reasonable ballpark number.
 	 */
 	ddm_per_deg = (0.12 * nav->gs.gs) / 0.0875;
-	radio->gp_ddm = vdef_deg / ddm_per_deg;
+	radio->gp_ddm = -vdef_deg / ddm_per_deg;
 
 #if	USE_XPLANE_RADIO_DRS
 	FILTER_IN_NAN(radio->vdef, vdef_dots, d_t, DEF_UPD_RATE(signal_db));
