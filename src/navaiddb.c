@@ -250,8 +250,15 @@ parse_loc(char **comps, size_t n_comps, navaid_t **nav_pp)
 {
 	navaid_t *nav = parse_navaid_common(comps, n_comps, NAVAID_LOC, 12);
 
-	if (nav != NULL)
-		nav->loc.brg = atof(comps[6]);
+	if (nav != NULL) {
+		double brg_raw = atof(comps[6]);
+		/*
+		 * X-Plane 11.50 nav data format embeds the magnetic front
+		 * course into the bearing field.
+		 */
+		nav->loc.brg = fmod(brg_raw, 360);
+		nav->loc.fcrs = (brg_raw >= 360 ? round(brg_raw / 360) : NAN);
+	}
 	if (nav == NULL || !is_valid_loc_freq(HZ2MHZ(nav->freq)) ||
 	    !is_valid_hdg(nav->loc.brg)) {
 		free(nav);
