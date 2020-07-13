@@ -72,6 +72,11 @@
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
 #define	FLOOP_INTVAL		0.05	/* seconds */
 
+#define	VOR_SIGMA_FLOOR		2e-4
+#define	DME_SIGMA_FLOOR		1e-3
+#define	LOC_SIGMA_FLOOR		2e-4
+#define	GS_SIGMA_FLOOR		2e-4
+
 #define	AUDIO_BUF_NUM_CHUNKS	110
 #define	VOR_BUF_NUM_SAMPLES	4800
 #define	DME_BUF_NUM_SAMPLES	4788
@@ -1921,8 +1926,8 @@ radio_get_bearing(radio_t *radio)
 
 	if (radio->type != NAVRAD_TYPE_ADF) {
 		enum { MAX_ERROR = 5 };
-		error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
-		    brg_cone_error(rnav);
+		error = MAX_ERROR * signal_error(rnav->signal_db,
+		    VOR_SIGMA_FLOOR) + brg_cone_error(rnav);
 		return (normalize_hdg(true_brg + error));
 	} else {
 		/*
@@ -1956,7 +1961,7 @@ radio_get_bearing(radio_t *radio)
 		 */
 		signal_drop = log(vect2_abs(v2)) * 10;
 		error = MAX_ERROR * signal_error(rnav->signal_db + signal_drop,
-		    0.005) + brg_cone_error(rnav);
+		    VOR_SIGMA_FLOOR) + brg_cone_error(rnav);
 
 		return (rel_brg + error);
 	}
@@ -1982,7 +1987,7 @@ radio_get_radial(radio_t *radio)
 	}
 
 	radial = normalize_hdg(brg2navaid(nav, NULL, NULL) + 180);
-	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005) +
+	error = MAX_ERROR * signal_error(rnav->signal_db, VOR_SIGMA_FLOOR) +
 	    brg_cone_error(rnav);
 
 	return (normalize_hdg(radial + error - nav->vor.magvar));
@@ -2019,7 +2024,7 @@ radio_get_dme(radio_t *radio)
 	pos_3d = geo2ecef_mtr(pos, &wgs84);
 	dist = vect3_abs(vect3_sub(pos_3d, nav->ecef));
 
-	error = MAX_ERROR * signal_error(rnav->signal_db, 0.005);
+	error = MAX_ERROR * signal_error(rnav->signal_db, DME_SIGMA_FLOOR);
 
 	return (dist + error + nav->dme.bias);
 }
@@ -2088,7 +2093,7 @@ radio_comp_hdef_loc(radio_t *radio, double *ddm_p)
 	ASSERT(nav->loc.ref_datum_dist != 0);
 	sector_width_deg = RAD2DEG(atan(106.9 / nav->loc.ref_datum_dist));
 	distort_amplitude[1].x = sector_width_deg;
-	sig_err = MAX_ERROR * signal_error(rnav->signal_db, 0.005);
+	sig_err = MAX_ERROR * signal_error(rnav->signal_db, LOC_SIGMA_FLOOR);
 	seed = crc64(nav->id, sizeof (nav->id)) & 255;
 	distort = (sin(0.87 * angdev + seed) + sin(angdev + seed) +
 	    sin(1.89 * angdev + seed)) *
@@ -2270,7 +2275,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 		angle = 90;
 
 	signal_db += fx_lin_multi(ABS(angle), signal_angle_curve, B_TRUE);
-	error = MAX_ERROR * signal_error(signal_db + 4, 0.005);
+	error = MAX_ERROR * signal_error(signal_db + 4, GS_SIGMA_FLOOR);
 	error += OFFPATH_MAX_ERROR *
 	    sin(nav->gs.brg + offpath / rand_coeffs[0]) *
 	    sin(nav->gs.brg + offpath / rand_coeffs[1]) *
