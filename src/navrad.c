@@ -1883,6 +1883,30 @@ brg2navaid(const navaid_t *nav, double *dist, double *vert_angle)
 }
 
 static double
+brg_from_navaid(const navaid_t *nav, double *dist)
+{
+	geo_pos3_t acf_pos;
+	geo_pos3_t nav_pos;
+	fpp_t fpp;
+	vect2_t v;
+
+	ASSERT(nav != NULL);
+	nav_pos = navaid_get_pos(nav);
+
+	mutex_enter(&navrad.lock);
+	acf_pos = navrad.pos;
+	mutex_exit(&navrad.lock);
+
+	fpp = ortho_fpp_init(GEO3_TO_GEO2(nav_pos), 0, NULL, B_FALSE);
+	v = geo2fpp(GEO3_TO_GEO2(acf_pos), &fpp);
+
+	if (dist != NULL)
+		*dist = vect2_abs(v);
+
+	return (dir2hdg(v));
+}
+
+static double
 brg_cone_error(radio_navaid_t *rnav)
 {
 	double f = clamp((rnav->slant_angle - 60) / 30, 0, 1);
@@ -1986,7 +2010,7 @@ radio_get_radial(radio_t *radio)
 		return (NAN);
 	}
 
-	radial = normalize_hdg(brg2navaid(nav, NULL, NULL) + 180);
+	radial = brg_from_navaid(nav, NULL);
 	error = MAX_ERROR * signal_error(rnav->signal_db, VOR_SIGMA_FLOOR) +
 	    brg_cone_error(rnav);
 
@@ -2062,7 +2086,7 @@ radio_comp_hdef_loc(radio_t *radio, double *ddm_p)
 		return (NAN);
 	}
 	radio->loc_fcrs = nav->loc.brg;
-	nav_brg = brg2navaid(nav, NULL, NULL);
+	nav_brg = normalize_hdg(brg_from_navaid(nav, NULL) + 180);
 	angdev = rel_hdg(nav->loc.brg, nav_brg);
 
 	/* simulate reverse sensing for the back-course */
@@ -2245,7 +2269,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY_VLOC)
 		return;
 
-	brg = brg2navaid(nav, &dist, NULL);
+	brg = normalize_hdg(brg_from_navaid(nav, &dist) + 180);
 	offpath = fabs(rel_hdg(brg, nav->gs.brg));
 	long_dist = dist * cos(DEG2RAD(offpath));
 	if (long_dist >= DB_ELEV_DIST) {
