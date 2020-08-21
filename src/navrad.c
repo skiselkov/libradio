@@ -2050,7 +2050,7 @@ radio_get_dme(radio_t *radio)
 
 	error = MAX_ERROR * signal_error(rnav->signal_db, DME_SIGMA_FLOOR);
 
-	return (dist + error + nav->dme.bias);
+	return (MAX(dist + error + nav->dme.bias, 0));
 }
 
 static double
