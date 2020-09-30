@@ -1997,7 +1997,7 @@ radio_get_radial(radio_t *radio)
 	double radial, error;
 	radio_navaid_t *rnav;
 	const navaid_t *nav;
-	enum { MAX_ERROR = 3 };
+	enum { MAX_ERROR = 1 };
 
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
 
