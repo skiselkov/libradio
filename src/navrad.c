@@ -28,6 +28,7 @@
 #include <acfutils/math.h>
 #include <acfutils/mt_cairo_render.h>
 #include <acfutils/perf.h>
+#include <acfutils/safe_alloc.h>
 #include <acfutils/worker.h>
 #include <acfutils/time.h>
 
@@ -85,6 +86,8 @@
 #define	NAVRAD_LOCK_DELAY_VLOC	1	/* seconds */
 #define	NAVRAD_LOCK_DELAY_DME	0.2	/* seconds */
 #define	NAVRAD_LOCK_DELAY_ADF	0.75	/* seconds */
+
+#define	FREQ_UNDEF		((uint64_t)-1)
 
 #define	NAVRAD_PARKED_BRG	90	/* bearing pointer parked pos */
 
@@ -1012,7 +1015,7 @@ radio_floop_cb(radio_t *radio, double d_t)
 	if (radio->failed)
 		new_freq = 0;
 
-	if (radio->freq != new_freq) {
+	if (radio->freq != new_freq && new_freq != FREQ_UNDEF) {
 		radio->freq = new_freq;
 		radio->freq_chg_t = navrad.cur_t;
 		radio->ident_delay = wavg(5, 10, crc64_rand_fract());
@@ -1071,7 +1074,7 @@ radio_refresh_navaid_list_type(radio_t *radio, avl_tree_t *tree,
 
 		rnav = avl_find(tree, &srch, &where);
 		if (rnav == NULL) {
-			rnav = calloc(1, sizeof (*rnav));
+			rnav = safe_calloc(1, sizeof (*rnav));
 			rnav->radio = radio;
 			rnav->navaid = list->navaids[i];
 			audio_buf_chunks_encode(rnav);
@@ -1198,7 +1201,7 @@ profile_debug_draw_cb(cairo_t *cr, unsigned w, unsigned h, void *userinfo)
 		return;
 	}
 
-	elev = malloc(profile_debug.num_pts * sizeof (*elev));
+	elev = safe_malloc(profile_debug.num_pts * sizeof (*elev));
 	memcpy(elev, profile_debug.elev, profile_debug.num_pts *
 	    sizeof (*elev));
 	num_pts = profile_debug.num_pts;
@@ -1330,9 +1333,9 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	memset(&probe, 0, sizeof (probe));
 	probe.num_pts = clampi(dist / SPACING, 2, MAX_PTS);
 	water_part = 1.0 / probe.num_pts;
-	probe.in_pts = calloc(probe.num_pts, sizeof (*probe.in_pts));
-	probe.out_elev = calloc(probe.num_pts, sizeof (*probe.out_elev));
-	probe.out_water = calloc(probe.num_pts, sizeof (*probe.out_water));
+	probe.in_pts = safe_calloc(probe.num_pts, sizeof (*probe.in_pts));
+	probe.out_elev = safe_calloc(probe.num_pts, sizeof (*probe.out_elev));
+	probe.out_water = safe_calloc(probe.num_pts, sizeof (*probe.out_water));
 	probe.filter_lin = B_TRUE;
 
 	for (unsigned i = 0; i < probe.num_pts; i++) {
@@ -1365,7 +1368,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 		mutex_enter(&profile_debug.render_lock);
 		if (profile_debug.elev != NULL)
 			free(profile_debug.elev);
-		profile_debug.elev = malloc(probe.num_pts *
+		profile_debug.elev = safe_malloc(probe.num_pts *
 		    sizeof (*profile_debug.elev));
 		memcpy(profile_debug.elev, probe.out_elev,
 		    probe.num_pts * sizeof (*profile_debug.elev));
@@ -1647,6 +1650,7 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 
 	radio->type = type;
 	radio->nr = nr;
+	radio->new_freq = FREQ_UNDEF;
 	mutex_init(&radio->lock);
 	avl_create(&radio->vlocs, navrad_navaid_compar,
 	    sizeof (radio_navaid_t), offsetof(radio_navaid_t, node));
@@ -2390,7 +2394,7 @@ radio_dme_update(radio_t *radio, double d_t)
 		    NAVRAD_LOCK_DELAY_DME)
 			return;
 		FILTER_IN_NAN(radio->dme, dme, d_t,
-			DME_UPD_RATE(radio->signal_db));
+		    DME_UPD_RATE(radio->signal_db));
 	} else {
 		radio->dme = NAN;
 		radio->dme_lock_t = navrad.cur_t;
@@ -2642,12 +2646,20 @@ navrad_set_obs(unsigned nr, double obs)
 #endif	/* !USE_XPLANE_RADIO_DRS */
 }
 
+static bool_t
+radio_operable(const radio_t *radio)
+{
+	ASSERT(radio != NULL);
+	return (!radio->failed &&
+	    (radio->new_freq == FREQ_UNDEF || radio->freq == radio->new_freq));
+}
+
 double
 navrad_get_radial(unsigned nr)
 {
 	radio_t *radio = find_radio(NAVRAD_TYPE_VLOC, nr);
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
-	if (radio->failed || radio->freq != radio->new_freq)
+	if (!radio_operable(radio))
 		return (NAN);
 	return (radio_get_radial(radio));
 }
@@ -2658,7 +2670,7 @@ navrad_get_dme(navrad_type_t type, unsigned nr)
 	radio_t *radio = find_radio(type, nr);
 	ASSERT(radio->type == NAVRAD_TYPE_VLOC ||
 	    radio->type == NAVRAD_TYPE_DME);
-	if (radio->failed || radio->freq != radio->new_freq)
+	if (!radio_operable(radio))
 		return (NAN);
 	return (radio_get_dme(radio));
 }
@@ -2838,7 +2850,7 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
     const int16_t *tone, size_t step, size_t num_samples, bool_t squelch,
     bool_t agc, distort_t *distort_ctx)
 {
-	int16_t *buf = calloc(num_samples, sizeof (*buf));
+	int16_t *buf = safe_calloc(num_samples, sizeof (*buf));
 	double max_db = NOISE_LEVEL_AUDIO;
 	double tone_db = NOISE_FLOOR_NAV_ID;
 	double max_signal_db = NOISE_FLOOR_AUDIO;
