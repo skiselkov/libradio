@@ -13,7 +13,7 @@
  * CDDL HEADER END
 */
 /*
- * Copyright 2019 Saso Kiselkov. All rights reserved.
+ * Copyright 2020 Saso Kiselkov. All rights reserved.
  */
 
 #include <time.h>
@@ -69,7 +69,7 @@
 #define	VDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.5, (signal_db))
 #define	AP_STEER_UPD_RATE(signal_db)	signal_db_upd_rate(0.35, (signal_db))
 #define	BRG_UPD_RATE(signal_db)		signal_db_upd_rate(1, (signal_db))
-#define	DME_UPD_RATE(signal_db)		signal_db_upd_rate(0.7, (signal_db))
+#define	DME_UPD_RATE(signal_db)		signal_db_upd_rate(1, (signal_db))
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
 #define	FLOOP_INTVAL		0.05	/* seconds */
 
@@ -1838,7 +1838,7 @@ static double
 signal_db_upd_rate(double orig_rate, double signal_db)
 {
 	double d_sig = signal_db - NOISE_FLOOR_ERROR_RATE;
-	double div = pow(10, d_sig / 10);
+	double div = pow(10, d_sig / 20);
 	return (orig_rate + (orig_rate * 20) / div);
 }
 #endif	/* USE_XPLANE_RADIO_DRS */
@@ -2672,7 +2672,7 @@ navrad_get_dme(navrad_type_t type, unsigned nr)
 	    radio->type == NAVRAD_TYPE_DME);
 	if (!radio_operable(radio))
 		return (NAN);
-	return (radio_get_dme(radio));
+	return (radio->dme);
 }
 
 double
