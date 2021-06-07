@@ -1320,6 +1320,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	itm_pol_t pol;
 	double acf_hgt, nav_hgt;
 	double itm_freq = MAX(freq / 1000000.0, 20);
+	geo_pos2_t *in_pts;
 
 	ASSERT(!IS_NULL_VECT(v));
 
@@ -1333,14 +1334,15 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	memset(&probe, 0, sizeof (probe));
 	probe.num_pts = clampi(dist / SPACING, 2, MAX_PTS);
 	water_part = 1.0 / probe.num_pts;
-	probe.in_pts = safe_calloc(probe.num_pts, sizeof (*probe.in_pts));
+	in_pts = safe_calloc(probe.num_pts, sizeof (*probe.in_pts));
+	probe.in_pts = in_pts;
 	probe.out_elev = safe_calloc(probe.num_pts, sizeof (*probe.out_elev));
 	probe.out_water = safe_calloc(probe.num_pts, sizeof (*probe.out_water));
 	probe.filter_lin = B_TRUE;
 
 	for (unsigned i = 0; i < probe.num_pts; i++) {
 		vect2_t p = vect2_scmul(v, i / (double)(probe.num_pts - 1));
-		probe.in_pts[i] = fpp2geo(p, fpp);
+		in_pts[i] = fpp2geo(p, fpp);
 	}
 	navrad.opengpws->terr_probe(&probe);
 	for (unsigned i = 0; i < probe.num_pts; i++)
@@ -1386,7 +1388,7 @@ radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
 	    ITM_ENV_CONTINENTAL_TEMPERATE, pol, ITM_ACCUR_MAX, ITM_ACCUR_MAX,
 	    ITM_ACCUR_MAX, &dbloss, &propmode, NULL);
 
-	free(probe.in_pts);
+	free(in_pts);
 	free(probe.out_elev);
 	free(probe.out_water);
 
