@@ -158,7 +158,7 @@ typedef struct {
 	 * a 1 kHz tone. This is generated from audio_buf_chunks_encode.
 	 */
 	uint8_t		audio_chunks[AUDIO_BUF_NUM_CHUNKS];
-	unsigned	cur_audio_chunk;
+	unsigned	cur_audio_chunk[NAVRAD_MAX_STREAMS];
 
 	avl_node_t	node;
 } radio_navaid_t;
@@ -187,8 +187,8 @@ struct radio_s {
 	double		loc_ddm;
 	double		hdef_lock_t;
 	double		gs;
-	distort_t	*distort_vloc;
-	distort_t	*distort_dme;
+	distort_t	*distort_vloc[NAVRAD_MAX_STREAMS];
+	distort_t	*distort_dme[NAVRAD_MAX_STREAMS];
 	double		loc_fcrs;
 	double		brg;
 	double		brg_lock_t;
@@ -1078,8 +1078,12 @@ radio_refresh_navaid_list_type(radio_t *radio, avl_tree_t *tree,
 			rnav->radio = radio;
 			rnav->navaid = list->navaids[i];
 			audio_buf_chunks_encode(rnav);
-			rnav->cur_audio_chunk =
+			rnav->cur_audio_chunk[0] =
 			    crc64_rand() % AUDIO_BUF_NUM_CHUNKS;
+			for (int i = 1; i < NAVRAD_MAX_STREAMS; i++) {
+				rnav->cur_audio_chunk[i] =
+				    rnav->cur_audio_chunk[0];
+			}
 			rnav->signal_db = NOISE_FLOOR_TOO_FAR;
 			rnav->signal_db_omni = NOISE_FLOOR_TOO_FAR;
 			rnav->signal_db_tgt = NOISE_FLOOR_TOO_FAR;
@@ -1662,8 +1666,10 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 	    sizeof (radio_navaid_t), offsetof(radio_navaid_t, node));
 	avl_create(&radio->adfs, navrad_navaid_compar,
 	    sizeof (radio_navaid_t), offsetof(radio_navaid_t, node));
-	radio->distort_vloc = distort_init(NAVRAD_AUDIO_SRATE);
-	radio->distort_dme = distort_init(NAVRAD_AUDIO_SRATE);
+	for (unsigned i = 0; i < NAVRAD_MAX_STREAMS; i++) {
+		radio->distort_vloc[i] = distort_init(NAVRAD_AUDIO_SRATE);
+		radio->distort_dme[i] = distort_init(NAVRAD_AUDIO_SRATE);
+	}
 
 #if	USE_XPLANE_RADIO_DRS
 	switch (type) {
@@ -1771,11 +1777,16 @@ radio_fini(radio_t *radio)
 	destroy_rnav_tree(&radio->dmes);
 	destroy_rnav_tree(&radio->adfs);
 
-	if (radio->distort_vloc != NULL)
-		distort_fini(radio->distort_vloc);
-	if (radio->distort_dme != NULL)
-		distort_fini(radio->distort_dme);
-
+	for (unsigned i = 0; i < NAVRAD_MAX_STREAMS; i++) {
+		if (radio->distort_vloc[i] != NULL) {
+			distort_fini(radio->distort_vloc[i]);
+			radio->distort_vloc[i] = NULL;
+		}
+		if (radio->distort_dme[i] != NULL) {
+			distort_fini(radio->distort_dme[i]);
+			radio->distort_dme[i] = NULL;
+		}
+	}
 	for (int i = 0; i < MAX_DR_VALS; i++) {
 		dr_delete(&radio->dr_vals[i].id_dr);
 		dr_delete(&radio->dr_vals[i].type_dr);
@@ -2804,18 +2815,23 @@ navrad_have_bearing(navrad_type_t type, unsigned nr)
 static void
 bfo_tones_generate(avl_tree_t *tree, int16_t *buf, size_t step,
     size_t num_samples, double noise_level_db, double tone_db,
-    const int16_t *tone)
+    unsigned stream_id, const int16_t *tone)
 {
 	enum { NOISE_FLOOR_TONE = -100 };
 	double noise_span = (noise_level_db - 20) - NOISE_FLOOR_TONE;
 	double tone_span = tone_db - NOISE_FLOOR_TONE;
 	double level = clamp(1 / (tone_span / noise_span), 0, 1);
 
+	ASSERT(tree != NULL);
+	ASSERT(buf != NULL);
+	ASSERT(tone != NULL);
+	ASSERT3U(stream_id, <, NAVRAD_MAX_STREAMS);
+
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
 		if (rnav->signal_db <= NOISE_FLOOR_AUDIO)
 			continue;
-		if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
+		if (rnav->audio_chunks[rnav->cur_audio_chunk[stream_id]] != 0) {
 			level = 1;
 			break;
 		}
@@ -2829,14 +2845,19 @@ bfo_tones_generate(avl_tree_t *tree, int16_t *buf, size_t step,
 
 static void
 am_tones_generate(avl_tree_t *tree, int16_t *buf, size_t step,
-    size_t num_samples, double span, const int16_t *tone)
+    size_t num_samples, double span, unsigned stream_id, const int16_t *tone)
 {
+	ASSERT(tree != NULL);
+	ASSERT(buf != NULL);
+	ASSERT(tone != NULL);
+	ASSERT3U(stream_id, <, NAVRAD_MAX_STREAMS);
+
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
 		double level;
 
 		if (rnav->signal_db <= NOISE_FLOOR_AUDIO ||
-		    rnav->audio_chunks[rnav->cur_audio_chunk] == 0)
+		    rnav->audio_chunks[rnav->cur_audio_chunk[stream_id]] == 0)
 			continue;
 
 		level = (rnav->signal_db - NOISE_FLOOR_AUDIO) / span;
@@ -2850,13 +2871,19 @@ am_tones_generate(avl_tree_t *tree, int16_t *buf, size_t step,
 static int16_t *
 get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
     const int16_t *tone, size_t step, size_t num_samples, bool_t squelch,
-    bool_t agc, distort_t *distort_ctx, bool_t advance)
+    bool_t agc, distort_t *distort_ctx, unsigned stream_id)
 {
 	int16_t *buf = safe_calloc(num_samples, sizeof (*buf));
 	double max_db = NOISE_LEVEL_AUDIO;
 	double tone_db = NOISE_FLOOR_NAV_ID;
 	double max_signal_db = NOISE_FLOOR_AUDIO;
 	double span, noise_level, noise_level_db;
+
+	ASSERT(radio != NULL);
+	ASSERT(tree != NULL);
+	ASSERT(tone != NULL);
+	ASSERT(distort_ctx != NULL);
+	ASSERT3U(stream_id, <, NAVRAD_MAX_STREAMS);
 
 	mutex_enter(&radio->lock);
 
@@ -2869,7 +2896,8 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 			 * We use the navaid into the signal estimation only
 			 * when there is a tone on the frequency.
 			 */
-			if (rnav->audio_chunks[rnav->cur_audio_chunk] != 0) {
+			if (rnav->audio_chunks[rnav->cur_audio_chunk[stream_id]]
+			    != 0) {
 				max_db = MAX(max_db, rnav->signal_db);
 				tone_db = MAX(tone_db, rnav->signal_db);
 			}
@@ -2905,16 +2933,17 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 	    (radio->adf_mode == ADF_MODE_ADF_BFO ||
 	    radio->adf_mode == ADF_MODE_ANT_BFO)) {
 		bfo_tones_generate(tree, buf, step, num_samples,
-		    noise_level_db, max_signal_db, tone);
+		    noise_level_db, max_signal_db, stream_id, tone);
 	} else {
-		am_tones_generate(tree, buf, step, num_samples, span, tone);
+		am_tones_generate(tree, buf, step, num_samples, span,
+		    stream_id, tone);
 	}
-	if (advance) {
-		for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
-		    rnav = AVL_NEXT(tree, rnav)) {
-			rnav->cur_audio_chunk++;
-			if (rnav->cur_audio_chunk >= AUDIO_BUF_NUM_CHUNKS)
-				rnav->cur_audio_chunk = 0;
+	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
+	    rnav = AVL_NEXT(tree, rnav)) {
+		rnav->cur_audio_chunk[stream_id]++;
+		if (rnav->cur_audio_chunk[stream_id] >=
+		    AUDIO_BUF_NUM_CHUNKS) {
+			rnav->cur_audio_chunk[stream_id] = 0;
 		}
 	}
 
@@ -2928,7 +2957,7 @@ get_audio_buf_type(radio_t *radio, avl_tree_t *tree, double volume,
 
 int16_t *
 navrad_get_audio_buf2(navrad_type_t type, unsigned nr, double volume,
-    bool_t squelch, bool_t agc, bool_t advance, size_t *num_samples)
+    bool_t squelch, bool_t agc, unsigned stream_id, size_t *num_samples)
 {
 	radio_t *radio = find_radio(type, nr);
 	bool_t is_dme = (type == NAVRAD_TYPE_DME ? B_TRUE : B_FALSE);
@@ -2938,6 +2967,9 @@ navrad_get_audio_buf2(navrad_type_t type, unsigned nr, double volume,
 	int16_t *buf;
 	const int16_t *tone = (!is_dme ? dme_tone : vor_tone);
 	distort_t *distort;
+
+	ASSERT3U(stream_id, <, NAVRAD_MAX_STREAMS);
+	ASSERT(num_samples != NULL);
 
 	if (radio->failed) {
 		*num_samples = 0;
@@ -2955,9 +2987,10 @@ navrad_get_audio_buf2(navrad_type_t type, unsigned nr, double volume,
 		tree = &radio->adfs;
 		break;
 	}
-	distort = (!is_dme ? radio->distort_vloc : radio->distort_dme);
+	distort = (!is_dme ? radio->distort_vloc[stream_id] :
+	    radio->distort_dme[stream_id]);
 	buf = get_audio_buf_type(radio, tree, volume, tone, step, samples,
-	    squelch, agc, distort, advance);
+	    squelch, agc, distort, stream_id);
 
 	*num_samples = samples;
 	return (buf);
@@ -2981,8 +3014,41 @@ void
 navrad_done_audio(unsigned nr)
 {
 	ASSERT3U(nr, <, NUM_NAV_RADIOS);
-	distort_clear_buffers(navrad.vloc_radios[nr].distort_vloc);
-	distort_clear_buffers(navrad.vloc_radios[nr].distort_dme);
+	for (unsigned i = 0; i < NAVRAD_MAX_STREAMS; i++) {
+		distort_clear_buffers(navrad.vloc_radios[nr].distort_vloc[i]);
+		distort_clear_buffers(navrad.vloc_radios[nr].distort_dme[i]);
+	}
+}
+
+void
+navrad_sync_streams(navrad_type_t type, unsigned nr)
+{
+	radio_t *radio = find_radio(type, nr);
+	const avl_tree_t *tree;
+
+	ASSERT(radio != NULL);
+
+	switch (type) {
+	case NAVRAD_TYPE_VLOC:
+		tree = &radio->vlocs;
+		break;
+	case NAVRAD_TYPE_DME:
+		tree = &radio->dmes;
+		break;
+	default:
+		ASSERT3U(type, ==, NAVRAD_TYPE_ADF);
+		tree = &radio->adfs;
+		break;
+	}
+	mutex_enter(&radio->lock);
+	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
+	    rnav = AVL_NEXT(tree, rnav)) {
+		for (unsigned i = 1; i < ARRAY_NUM_ELEM(rnav->cur_audio_chunk);
+		    i++) {
+			rnav->cur_audio_chunk[i] = rnav->cur_audio_chunk[0];
+		}
+	}
+	mutex_exit(&radio->lock);
 }
 
 void

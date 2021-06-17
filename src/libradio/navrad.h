@@ -84,12 +84,14 @@ adf_mode_t navrad_get_adf_mode(unsigned nr);
 void navrad_set_brg_override(navrad_type_t type, unsigned nr, bool_t flag);
 bool_t navrad_get_brg_override(navrad_type_t type, unsigned nr);
 
+#define	NAVRAD_MAX_STREAMS	4
 int16_t *navrad_get_audio_buf(navrad_type_t type, unsigned nr, double volume,
     bool_t squelch, bool_t agc, size_t *num_samples);
 int16_t *navrad_get_audio_buf2(navrad_type_t type, unsigned nr, double volume,
-    bool_t squelch, bool_t agc, bool_t advance, size_t *num_samples);
+    bool_t squelch, bool_t agc, unsigned stream_id, size_t *num_samples);
 void navrad_free_audio_buf(int16_t *buf);
 void navrad_done_audio(unsigned nr);
+void navrad_sync_streams(navrad_type_t type, unsigned nr);
 
 #ifdef	__cplusplus
 }
