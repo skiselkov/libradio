@@ -86,6 +86,8 @@ bool_t navrad_get_brg_override(navrad_type_t type, unsigned nr);
 
 int16_t *navrad_get_audio_buf(navrad_type_t type, unsigned nr, double volume,
     bool_t squelch, bool_t agc, size_t *num_samples);
+int16_t *navrad_get_audio_buf2(navrad_type_t type, unsigned nr, double volume,
+    bool_t squelch, bool_t agc, bool_t advance, size_t *num_samples);
 void navrad_free_audio_buf(int16_t *buf);
 void navrad_done_audio(unsigned nr);
 
