@@ -26,7 +26,11 @@
 #ifndef	_LIBRADIO_NAVRAD_H_
 #define	_LIBRADIO_NAVRAD_H_
 
+#include <opengpws/xplane_api.h>
+
 #include <libradio/navaiddb.h>
+
+#include "itm_c.h"
 
 #ifdef	__cplusplus
 extern "C" {
@@ -48,6 +52,47 @@ typedef enum {
 	ADF_MODE_ADF_BFO,
 	ADF_MODE_ANT_BFO
 } adf_mode_t;
+
+typedef void (*libradio_profile_debug_cb_t)(const egpws_terr_probe_t *probe,
+    double p1_hgt, double p2_hgt, void *userinfo);
+/*
+ * You can use the libradio_compute_signal_prop function to perform your own
+ * custom radio propagation computations. This performs all the terrain
+ * profile lookup and ITM computations for you. Use this function sparingly,
+ * as it involves an OpenGPWS terrain probe with up 600 points, which is
+ * not exactly cheap (doing a few of these checks per frame is ok, but don't
+ * invoke it hundreds of times per frame - cache the results for a few secs).
+ *
+ * @param p1 Station 1 position, elevation in meters.
+ * @param p2 Station 2 position, elevation in meters.
+ * @param p1_min_hgt Minimum height above ground allowable for station 1.
+ *	If the terrain lookup ends up with p1 being closer to the ground
+ *	than p1_min_tgt, its elevation is adjusted up to be at least
+ *	p1_min_hgt meters above ground.
+ * @param p2_min_hgt Same as p1_min_hgt, but for point p2.
+ * @param freq Frequency of the signal in Hz.
+ * @param pol Polarization of the signal.
+ * @param dbloss_out Optional output parameter (set to NULL if not needed).
+ *	This provides the signal loss in dB between the two stations.
+ *	N.B. this will be a positive number, but it is actually the LOSS of
+ *	signal level. To obtain the absolute signal level, you should do:
+ *		signal_at_receiver = signal_at_transmitter - dbloss;
+ * @param propmode_out Optional output parameter (set to NULL if not needed).
+ *	This provides the principal propagation mode for the signal between
+ *	the stations. This will be one of the ITM_PROPMODE_ macros defined
+ *	in itm_c.h. You can use itm_propmode2str to convert this into a short
+ *	readable description of the propagation mode.
+ * @param profile_debug_cb An optional output callback (set to NULL if not
+ *	needed). If provided, this will be called with the terrain profile
+ *	that was constructed out of the OpenGPWS and the actual heights of
+ *	points p1 and p2 above their local ground.
+ * @param userinfo Optional userinfo pointer that will be passed to
+ *	profile_debug_cb.
+ */
+void libradio_compute_signal_prop(geo_pos3_t p1, geo_pos3_t p2,
+    double p1_min_hgt, double p2_min_hgt, uint64_t freq, itm_pol_t pol,
+    double *dbloss_out, int *propmode_out,
+    libradio_profile_debug_cb_t profile_debug_cb, void *userinfo);
 
 bool_t navrad_init(navaiddb_t *db);
 bool_t navrad_init2(navaiddb_t *db, unsigned num_dmes);

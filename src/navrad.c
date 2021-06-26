@@ -32,8 +32,6 @@
 #include <acfutils/worker.h>
 #include <acfutils/time.h>
 
-#include "opengpws/xplane_api.h"
-
 #include "distort.h"
 #include "libradio/navrad.h"
 #include "itm_c.h"
@@ -475,6 +473,91 @@ static void radio_dme_update(radio_t *radio, double d_t);
 #if	USE_XPLANE_RADIO_DRS
 static double signal_db_upd_rate(double orig_rate, double signal_db);
 #endif
+
+void
+libradio_compute_signal_prop(geo_pos3_t p1, geo_pos3_t p2, double p1_min_hgt,
+    double p2_min_hgt, uint64_t freq, itm_pol_t pol, double *dbloss_out,
+    int *propmode_out,
+    libradio_profile_debug_cb_t profile_debug_cb, void *userinfo)
+{
+	enum {
+	    MAX_PTS = 600,
+	    SPACING = 250,		/* meters */
+	    MIN_DIST = 1000,		/* meters */
+	    MAX_DIST = 1000000,		/* meters */
+	    WATER_OCEAN_MIN = 40000,	/* meters */
+	    WATER_OCEAN_MAX = 100000	/* meters */
+	};
+	fpp_t fpp;
+	vect2_t v;
+	double dist = clamp(gc_distance(TO_GEO2(p1), TO_GEO2(p2)),
+	    MIN_DIST, MAX_DIST);
+	double dbloss, water_part, water_length, dielec, conduct, water_conduct;
+	double water_fract = 0;
+	int propmode;
+	double itm_freq = MAX(freq / 1000000.0, 20);
+	double p1_hgt, p2_hgt;
+	geo_pos2_t *in_pts;
+	egpws_terr_probe_t probe = {};
+
+	ASSERT(!IS_NULL_GEO_POS(p1));
+	ASSERT(!IS_NULL_GEO_POS(p2));
+	ASSERT3F(p1_min_hgt, >=, 0);
+	ASSERT3F(p2_min_hgt, >=, 0);
+
+	fpp = ortho_fpp_init(TO_GEO2(p1), 0, NULL, B_TRUE);
+	v = geo2fpp(TO_GEO2(p2), &fpp);
+	ASSERT(!IS_NULL_VECT(v));
+
+	probe.num_pts = clampi(dist / SPACING, 2, MAX_PTS);
+	water_part = 1.0 / probe.num_pts;
+	in_pts = safe_calloc(probe.num_pts, sizeof (*probe.in_pts));
+	probe.in_pts = in_pts;
+	probe.out_elev = safe_calloc(probe.num_pts, sizeof (*probe.out_elev));
+	probe.out_water = safe_calloc(probe.num_pts, sizeof (*probe.out_water));
+	probe.filter_lin = B_TRUE;
+
+	for (unsigned i = 0; i < probe.num_pts; i++) {
+		vect2_t p = vect2_scmul(v, i / (double)(probe.num_pts - 1));
+		in_pts[i] = fpp2geo(p, &fpp);
+	}
+	navrad.opengpws->terr_probe(&probe);
+	for (unsigned i = 0; i < probe.num_pts; i++)
+		water_fract += probe.out_water[i] * water_part;
+	water_fract = clamp(water_fract, 0, 1);
+
+	water_length = dist * water_fract;
+	water_conduct = wavg(ITM_CONDUCT_WATER_FRESH, ITM_CONDUCT_WATER_SALT,
+	    iter_fract(water_length, WATER_OCEAN_MIN, WATER_OCEAN_MAX, B_TRUE));
+
+	dielec = wavg(ITM_DIELEC_GND_AVG, ITM_DIELEC_WATER_FRESH, water_fract);
+	conduct = wavg(ITM_CONDUCT_GND_AVG, water_conduct, water_fract);
+	/*
+	 * Some navaid DB entries are incorrect and list the navaid as
+	 * "below ground" (or elevation zero if unknown). Correct those
+	 * and clamp the height of the navaid to be at a minimum on the
+	 * ground (+10 meters for height).
+	 */
+	p1_hgt = MAX(p1.elev - probe.out_elev[0], p1_min_hgt);
+	p2_hgt = MAX(p1.elev - probe.out_elev[probe.num_pts - 1], p2_min_hgt);
+
+	(void) itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
+	    p1_hgt, p2_hgt, dielec, conduct, ITM_NS_AVG, itm_freq,
+	    ITM_ENV_CONTINENTAL_TEMPERATE, pol, ITM_ACCUR_MAX, ITM_ACCUR_MAX,
+	    ITM_ACCUR_MAX, &dbloss, &propmode, NULL);
+
+	if (profile_debug_cb != NULL)
+		profile_debug_cb(&probe, p1_hgt, p2_hgt, userinfo);
+
+	free(in_pts);
+	free(probe.out_elev);
+	free(probe.out_water);
+
+	if (dbloss_out != NULL)
+		*dbloss_out = dbloss;
+	if (propmode_out != NULL)
+		*propmode_out = propmode;
+}
 
 /*
  * Computes the actual signal level at the receiver, applying various
@@ -1298,103 +1381,74 @@ profile_debug_draw_cb(cairo_t *cr, unsigned w, unsigned h, void *userinfo)
 static double
 navaid_min_hgt(double dist)
 {
-	return (MAX(10, MET2NM(dist) / 2));
+	return (MAX(10, MET2NM(dist) / 4));
+}
+
+typedef struct {
+	radio_navaid_t	*rnav;
+	const navaid_t	*nav;
+	double		dist;
+} profile_debug_info_t;
+
+static void
+profile_debug_cb(const egpws_terr_probe_t *probe, double p1_hgt, double p2_hgt,
+    void *userinfo)
+{
+	profile_debug_info_t *info;
+
+	ASSERT(probe != NULL);
+	ASSERT(userinfo != NULL);
+	info = userinfo;
+
+	ASSERT(info->rnav != NULL);
+	if (profile_debug_check(info->rnav)) {
+		ASSERT(info->nav != NULL);
+
+		mutex_enter(&profile_debug.render_lock);
+		if (profile_debug.elev != NULL)
+			free(profile_debug.elev);
+		profile_debug.elev = safe_malloc(probe->num_pts *
+		    sizeof (*profile_debug.elev));
+		memcpy(profile_debug.elev, probe->out_elev,
+		    probe->num_pts * sizeof (*profile_debug.elev));
+		profile_debug.num_pts = probe->num_pts;
+		profile_debug.acf_alt = probe->out_elev[0] + p1_hgt;
+		profile_debug.nav_alt = probe->out_elev[probe->num_pts - 1] +
+		    p2_hgt;
+		profile_debug.dist = info->dist;
+		profile_debug.freq = navaid_act_freq(info->nav->type,
+		    info->nav->freq);
+		mutex_exit(&profile_debug.render_lock);
+	}
 }
 
 static void
 radio_navaid_recompute_signal(radio_navaid_t *rnav, uint64_t freq,
-    geo_pos3_t pos, fpp_t *fpp)
+    geo_pos3_t pos, const fpp_t *fpp)
 {
 	const navaid_t *nav = rnav->navaid;
-	geo_pos3_t nav_pos = navaid_get_pos(nav);
-	vect2_t v = geo2fpp(GEO3_TO_GEO2(nav_pos), fpp);
-	enum {
-	    MAX_PTS = 600,
-	    SPACING = 250,		/* meters */
-	    MIN_DIST = 1000,		/* meters */
-	    MAX_DIST = 1000000,		/* meters */
-	    WATER_OCEAN_MIN = 40000,	/* meters */
-	    WATER_OCEAN_MAX = 100000	/* meters */
-	};
-	double dist = clamp(vect2_abs(v), MIN_DIST, MAX_DIST);
-	egpws_terr_probe_t probe;
-	double dbloss, water_part, water_length, dielec, conduct, water_conduct;
+	double dist, nav_min_hgt, dbloss;
 	int propmode;
-	double water_fract = 0;
+	geo_pos3_t nav_pos;
 	itm_pol_t pol;
-	double acf_hgt, nav_hgt;
-	double itm_freq = MAX(freq / 1000000.0, 20);
-	geo_pos2_t *in_pts;
+	profile_debug_info_t info = { .rnav = rnav, .nav = nav };
 
-	ASSERT(!IS_NULL_VECT(v));
+	ASSERT(rnav != NULL);
+	ASSERT(fpp != NULL);
 
+	nav_pos = navaid_get_pos(nav);
 	if (nav->type == NAVAID_VOR || nav->type == NAVAID_LOC ||
 	    nav->type == NAVAID_GS) {
 		pol = ITM_POL_HORIZ;
 	} else {
 		pol = ITM_POL_VERT;
 	}
+	dist = gc_distance(TO_GEO2(pos), TO_GEO2(nav_pos));
+	nav_min_hgt = navaid_min_hgt(dist);
 
-	memset(&probe, 0, sizeof (probe));
-	probe.num_pts = clampi(dist / SPACING, 2, MAX_PTS);
-	water_part = 1.0 / probe.num_pts;
-	in_pts = safe_calloc(probe.num_pts, sizeof (*probe.in_pts));
-	probe.in_pts = in_pts;
-	probe.out_elev = safe_calloc(probe.num_pts, sizeof (*probe.out_elev));
-	probe.out_water = safe_calloc(probe.num_pts, sizeof (*probe.out_water));
-	probe.filter_lin = B_TRUE;
-
-	for (unsigned i = 0; i < probe.num_pts; i++) {
-		vect2_t p = vect2_scmul(v, i / (double)(probe.num_pts - 1));
-		in_pts[i] = fpp2geo(p, fpp);
-	}
-	navrad.opengpws->terr_probe(&probe);
-	for (unsigned i = 0; i < probe.num_pts; i++)
-		water_fract += probe.out_water[i] * water_part;
-	water_fract = clamp(water_fract, 0, 1);
-
-	water_length = dist * water_fract;
-	water_conduct = wavg(ITM_CONDUCT_WATER_FRESH, ITM_CONDUCT_WATER_SALT,
-	    iter_fract(water_length, WATER_OCEAN_MIN, WATER_OCEAN_MAX, B_TRUE));
-
-	dielec = wavg(ITM_DIELEC_GND_AVG, ITM_DIELEC_WATER_FRESH, water_fract);
-	conduct = wavg(ITM_CONDUCT_GND_AVG, water_conduct, water_fract);
-
-	/*
-	 * Some navaid DB entries are incorrect and list the navaid as
-	 * "below ground" (or elevation zero if unknown). Correct those
-	 * and clamp the height of the navaid to be at a minimum on the
-	 * ground (+10 meters for height).
-	 */
-	acf_hgt = MAX(pos.elev - probe.out_elev[0], 3);
-	nav_hgt = MAX(nav_pos.elev - probe.out_elev[probe.num_pts - 1],
-	    navaid_min_hgt(dist));
-
-	if (profile_debug_check(rnav)) {
-		mutex_enter(&profile_debug.render_lock);
-		if (profile_debug.elev != NULL)
-			free(profile_debug.elev);
-		profile_debug.elev = safe_malloc(probe.num_pts *
-		    sizeof (*profile_debug.elev));
-		memcpy(profile_debug.elev, probe.out_elev,
-		    probe.num_pts * sizeof (*profile_debug.elev));
-		profile_debug.num_pts = probe.num_pts;
-		profile_debug.acf_alt = probe.out_elev[0] + acf_hgt;
-		profile_debug.nav_alt = probe.out_elev[probe.num_pts - 1] +
-		    nav_hgt;
-		profile_debug.dist = dist;
-		profile_debug.freq = navaid_act_freq(nav->type, nav->freq);
-		mutex_exit(&profile_debug.render_lock);
-	}
-
-	(void) itm_point_to_pointMDH(probe.out_elev, probe.num_pts, dist,
-	    acf_hgt, nav_hgt, dielec, conduct, ITM_NS_AVG, itm_freq,
-	    ITM_ENV_CONTINENTAL_TEMPERATE, pol, ITM_ACCUR_MAX, ITM_ACCUR_MAX,
-	    ITM_ACCUR_MAX, &dbloss, &propmode, NULL);
-
-	free(in_pts);
-	free(probe.out_elev);
-	free(probe.out_water);
+	info.dist = dist;
+	libradio_compute_signal_prop(pos, nav_pos, 3, nav_min_hgt, freq, pol,
+	    &dbloss, &propmode, profile_debug_cb, &info);
 
 	rnav->signal_db_tgt = ANT_BASE_GAIN - dbloss;
 	rnav->propmode = propmode;
