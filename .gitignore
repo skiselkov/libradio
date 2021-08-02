@@ -10,3 +10,8 @@ src/java/RadioModel.zip
 src/java/doc
 
 src/dll/distort.dll
+
+plugin/qmake/Makefile.Debug
+plugin/qmake/Makefile.Release
+plugin/qmake/debug/
+plugin/qmake/libradio.plugin

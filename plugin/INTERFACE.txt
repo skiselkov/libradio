@@ -1,0 +1,278 @@
+*****************************************
+*** libradio plugin interfacing HOWTO ***
+*****************************************
+
+libradio exposes 5 radios by default:
+
+    "nav1" is the first combined NAV and DME radio
+    "nav2" is the second combined NAV and DME radio
+    "dme1" is a standalone DME-only radio
+    "adf1" is the first ADF radio
+    "adf2" is the second ADF radio
+
+libradio automatically follows X-Plane's frequency tuning for the
+respective radio by reading the following datarefs:
+
+    sim/cockpit2/radios/actuators/nav1_frequency_hz - tunes "nav1"
+    sim/cockpit2/radios/actuators/nav2_frequency_hz - tunes "nav2"
+    sim/cockpit2/radios/actuators/dme_frequency_hz - tunes "dme1"
+    sim/cockpit2/radios/actuators/adf1_frequency_hz - tunes "adf1"
+    sim/cockpit2/radios/actuators/adf2_frequency_hz - tunes "adf2"
+
+For each of these radios, you can read the details of the signal levels.
+Each radio can receive multiple navaids at the same time. libradio gives
+you signal levels for the top 64 navaids within a 300 NM radius.
+
+    libradio/<radio>/navaid{0-15}/type		type: int
+	This is the respective navaid type. The type is one of the
+	following possible values:
+	    1	- NDB
+	    2	- VOR
+	    4	- Localizer
+	    8	- Glideslope
+	    16	- Marker (unused)
+	    32	- DME
+	    64	- Final Path Alignment Point (unused)
+	    128	- Landing Threshold Point (unused)
+	    256	- GLS ground station (unused)
+
+    libradio/<radio>/navaid{0-15}/id		type: up to 12 bytes
+	This is the identifier of the originating station. This really is
+	meant for debugging purposes and doesn't imply that the station can
+	be received. The identifier is returned as NUL-terminated string.
+
+    libradio/<radio>/navaid{0-15}/signal_db	type: float
+	The signal intensity from the respective station in dBmW. This will
+	most typically be a negative value. Values greater than -50 dB are
+	usually excellent signal quality. Between -50 dB and -70 dB signal
+	quality and tracking accuracy slowly degrades from very good to poor.
+	Below -70 dB, tracking will tend to become very erratic, and very
+	slow, as libradio simulates the receiver having to filter a lot of
+	noise being received. At around -80 dB, libradio simulates a loss of
+	carrier, meaning, the signal is lost (CDI deflection not displaying,
+	DME not reading any distance, etc.)
+
+    libradio/<radio>/navaid{0-15}/propmode	type: int
+	This is for debugging purposes and denotes the strongest signal
+	propagation mode computed by the underlying Longley-Rice radio
+	model. The possible values are:
+	    -1:	unknown/no propagation mode computed
+	    0:	direct line of sight
+	    5:	single horizon, diffraction
+	    6:	single horizon, tropospheric scattering
+	    9:	double horizon, diffraction
+	    10:	double horizon, tropospheric scattering
+
+Example values:
+
+    Here's what you would typically see for the "nav1" radio tuned
+    to a VOR/DME:
+
+    libradio/nav1/navaid0/type = 2
+    libradio/nav1/navaid0/id = "IPA"
+    libradio/nav1/navaid0/signal_db = -45.2
+    libradio/nav1/navaid0/propmode = 0
+    libradio/nav1/navaid1/type = 32
+    libradio/nav1/navaid1/id = "IPA"
+    libradio/nav1/navaid1/signal_db = -68.1
+    libradio/nav1/navaid1/propmode = 5
+    libradio/nav1/navaid3/type = 0
+    libradio/nav1/navaid3/id = ""
+    libradio/nav1/navaid3/signal_db = 0
+    libradio/nav1/navaid3/propmode = -1
+    ... (etc for remaining navaid slots) ...
+
+    Notice that each transmission type (VOR and DME) is represented as a
+    separate navaid with its own signal strength and propagation mode.
+    When trying to determine the actual received signal strength, you
+    should only look for navaids of the appropriate "type" you are
+    interested in, then look at the "signal_db" values. Don't expect that
+    simply because you can receive the VHF VOR signal from a VOR/DME
+    station, that you will also be able to receive the DME. Due to
+    different wavelengths and propagation properties, some signals may be
+    available for a given station, while others may not.
+
+    Please also note that simply having a high signal strength doesn't
+    guarantee reception. libradio simulates radio garble, in case there
+    are multiple signals being received on the same type and frequency
+    with similar strengths. If no single signal is sufficiently stronger
+    than the others to "punch above the noise", then libradio will
+    simulate the receiver not being able to "lock on" to any single
+    station. Even more complicated, for example, you might be able to
+    receive the VOR portion of one station, while the DME portion of a
+    completely different station is more powerful and therefore "masking"
+    the DME signal of the station sending the VOR signal. While these
+    situations are rare and usually real-world facility planning tries to
+    avoid these, they are nevertheless occasionally possible. This
+    situation can most typically be seen when flying at high altitude and
+    listening to localizers in an area with many airports. Due to the
+    limited number of localizer frequencies available, it's possible to
+    get localizer signal garble or LOC/DME guidance mismatch. This is why
+    pilots are taught not to try to capture a localizer from too far
+    away.
+
++-----------------+
+| Output Datarefs |
++-----------------+
+
+By default, libradio overrides and takes control of the following default
+radio navigation datarefs:
+
+    ==================
+    === NAV radios ===
+    ==================
+
+    sim/operation/override/override_nav1_needles:
+    sim/operation/override/override_nav2_needles:
+	Permanently set to '1'.
+
+    sim/cockpit/radios/nav1_dir_degt:
+    sim/cockpit/radios/nav2_dir_degt:
+	Driven from the "nav1" and "nav2" radio VOR or LOC signal.
+
+    sim/cockpit/radios/nav1_slope_degt:
+    sim/cockpit/radios/nav2_slope_degt:
+	Driven from the "nav2" and "nav2" radio Glideslope signal.
+
+    sim/cockpit/radios/nav1_fromto:
+    sim/cockpit/radios/nav2_fromto:
+	Driven from the "nav1" and "nav2" radio VOR radial information
+	and the respective "nav{1,2}_obs_deg_mag_pilot" dataref setting.
+	Undefined value when the radio is tuned to a localizer.
+
+    sim/cockpit/radios/nav1_fromto2:
+    sim/cockpit/radios/nav2_fromto2:
+	Same as sim/cockpit/radios/nav{1,2}_fromto, except the from/to flag
+	is computed from the "nav{1,2}_obs_deg_mag_copilot" dataref.
+
+    sim/cockpit/radios/nav1_hdef_dot:
+    sim/cockpit/radios/nav2_hdef_dot:
+	When the respective NAV radio is tuned to a VOR, this is set based
+	on the relative difference between "nav{1,2}_obs_deg_mag_pilot"
+	and the VOR radial being received. Full deflection (2 dots)
+	corresponds to a 10 degree radial difference.
+	When the respective NAV radio is tuned to a localizer, this is
+	set based on simulated localizer DDM (which is determined
+	geometrically from runway length, localizer antenna placement and
+	other details specified in ICAO Annex 10). Please note that
+	localizers DO NOT have a fixed beam angle. Rather, they are defined
+	at the runway threshold in terms of a reference datum, and the
+	actual course width depends on the distance between the reference
+	datum and the localizer antenna. Full deflection (2 dots) is
+	shown when localizer DDM reaches 0.155, as per ICAO Annex 10.
+
+    sim/cockpit/radios/nav1_hdef_dot2:
+    sim/cockpit/radios/nav2_hdef_dot2:
+	Same as sim/cockpit/radios/nav{1,2}_hdef_dot, except for VORs,
+	the CDI deflection is calculated from "nav{1,2}_obs_deg_mag_copilot".
+
+    libradio/nav1/hdef_rate		[float]
+    libradio/nav2/hdef_rate		[float]
+    libradio/nav1/hdef_rate2		[float]
+    libradio/nav2/hdef_rate2		[float]
+	This is the rate at which the HDEF is changing in dots/s. The
+	`hdef_rate' version is for the left CDI, `hdef_rate2' is for the
+	right CDI. The value is simply computed from the underlying
+	radial/s or DDM/s rate of change. This should help prevent
+	derivative kick when the pilot adjusts their CDI course setting.
+
+    sim/cockpit/radios/nav1_vdef_dot:
+    sim/cockpit/radios/nav2_vdef_dot:
+	Driven from the "nav1" and "nav2" radio glideslope signal. This is
+	similar to the localizer signal, in that it is driven off the
+	glideslope DDM, which is not of a fixed angular size. Instead, it
+	is dependent upon the nominal glideslope centerline angle.
+
+    sim/cockpit/radios/nav1_vdef_dot2:
+    sim/cockpit/radios/nav2_vdef_dot2:
+	Same as nav{1,2}_vdef_dot2.
+
+    libradio/nav1/vdef_rate		[float]
+    libradio/nav2/vdef_rate		[float]
+	This is the rate at which the VDEF is changing in dots/s. The
+	value is simply computed from the underlying glidepath DDM/s
+	rate of change.
+
+    libradio/nav1/have_vor_signal = 0|1	[bool]
+    libradio/nav2/have_vor_signal = 0|1	[bool]
+	These are set to '1' when the NAV receiver is sensing the VOR VHF
+	carrier. The radial information might be extremely jittery at low
+	signal levels though, so be sure to look at the signal strength
+	as well.
+
+    libradio/nav1/radial = 0-360	[float]
+    libradio/nav2/radial = 0-360	[float]
+	The raw radial information actually measured. Note that is really
+	is the ONLY information sent out by a VOR. The CDI deflection is
+	an entirely synthetic indication generated in a CDI instrument.
+
+    libradio/nav1/radial_rate		[float]
+    libradio/nav2/radial_rate		[float]
+	This is the rate at which the VOR radial is changing in deg/s.
+
+    libradio/nav1/have_loc_signal = 0|1	[bool]
+    libradio/nav2/have_loc_signal = 0|1	[bool]
+	These are set to '1' when the NAV receiver is sensing the localizer
+	VHF carrier.
+
+    libradio/nav1/loc_ddm		[float]
+    libradio/nav2/loc_ddm		[float]
+	This is the raw difference-in-depth-of-modulation value for the
+	localizer VHF subcarriers. This is the only information actually
+	received from a localizer. libradio simulates signal distortion at
+	large angles from the localizer centerline, so don't trust the
+	value much beyond the standard +-0.155 as defined by ICAO Annex 10.
+	The signal is more-or-less linear only in this range. Beyond +-0.155,
+	the angle-to-DDM relationship can be significantly non-linear.
+
+    libradio/nav1/loc_ddm_rate		[float]
+    libradio/nav2/loc_ddm_rate		[float]
+	This is the rate at which the localizer DDM is changing in DDM/s.
+
+    libradio/nav1/have_gp_signal = 0|1	[bool]
+    libradio/nav2/have_gp_signal = 0|1	[bool]
+	These are set to '1' when the NAV receiver is sensing the glidepath
+	VHF carrier.
+
+    libradio/nav1/gp_ddm		[float]
+    libradio/nav2/gp_ddm		[float]
+	This is the raw difference-in-depth-of-modulation value for the
+	glidepath VHF subcarriers. This is the only information actually
+	received for the glidepath. libradio simulates signal distortion
+	at large angles away from nearly-on-path, as well as false
+	reflected images at multiples of the nominal glidepath angle.
+
+    libradio/nav1/gp_ddm_rate		[float]
+    libradio/nav2/gp_ddm_rate		[float]
+	This is the rate at which the glidepath DDM is changing in DDM/s.
+
+    ==================
+    === DME radios ===
+    ==================
+
+    sim/operation/override/override_dme:
+	Permanently set to '1'.
+
+    sim/cockpit2/radios/indicators/nav1_dme_distance_nm:
+    sim/cockpit2/radios/indicators/nav2_dme_distance_nm:
+	Distance output of the respective paired DME radio to the NAV radio.
+
+    sim/cockpit2/radios/indicators/nav_dme_distance_nm:
+	Distance output of the third standalone DME radio.
+
+    ==================
+    === ADF radios ===
+    ==================
+
+    sim/operation/override/override_adf:
+	Permanently set to '1'.
+
+    sim/cockpit/radios/adf1_dir_degt:
+    sim/cockpit/radios/adf2_dir_degt:
+	Relative bearing output of the respective ADF. This is driven
+	off the NDB signals being received by the ADF.
+
+    libradio/adf1/have_ndb_signal = 0|1	[bool]
+    libradio/adf2/have_ndb_signal = 0|1	[bool]
+	These are set to '1' when the ADF receiver sees what looks like
+	an NDB signal carrier.

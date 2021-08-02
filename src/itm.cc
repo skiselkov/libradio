@@ -771,6 +771,9 @@ void point_to_point(double elev[], double tht_m, double rht_m,
   double dkm, xkm;
   double fs;
 
+  (void)dkm;
+  (void)xkm;
+
   prop.hg[0] = tht_m;
   prop.hg[1] = rht_m;
   propv.klim = radio_climate;
@@ -853,6 +856,9 @@ void point_to_pointMDH(double elev[], double tht_m, double rht_m,
   double dkm, xkm;
   double fs;
 
+  (void)dkm;
+  (void)xkm;
+
   propmode = -1;  // mode is undefined
   prop.hg[0] = tht_m;
   prop.hg[1] = rht_m;
@@ -931,6 +937,9 @@ void point_to_pointDH(double elev[], double tht_m, double rht_m,
   long ja, jb, i, np;
   double dkm, xkm;
   double fs;
+
+  (void)dkm;
+  (void)xkm;
 
   prop.hg[0] = tht_m;
   prop.hg[1] = rht_m;
@@ -1016,6 +1025,8 @@ void area(long ModVar, double deltaH, double tht_m, double rht_m,
   double eps, eno, sgm;
   long ipol;
   int kst[2];
+
+  (void)strmode;
 
   kst[0] = (int) TSiteCriteria;
   kst[1] = (int) RSiteCriteria;
