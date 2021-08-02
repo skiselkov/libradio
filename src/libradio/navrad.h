@@ -28,7 +28,7 @@
 
 #include <opengpws/xplane_api.h>
 
-#include <libradio/navaiddb.h>
+#include "navaiddb.h"
 
 #include "itm_c.h"
 

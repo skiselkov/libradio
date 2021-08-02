@@ -63,9 +63,9 @@
 #define	HSENS_LOC		12.0	/* dot deflection per deg correction */
 #define	HDEF_FEEDBACK		15	/* dots per second */
 #define	MAX_INTCPT_ANGLE	30	/* degrees */
-#define	HDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.5, (signal_db))
-#define	VDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.5, (signal_db))
-#define	AP_STEER_UPD_RATE(signal_db)	signal_db_upd_rate(0.35, (signal_db))
+#define	HDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.25, (signal_db))
+#define	VDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.25, (signal_db))
+#define	AP_STEER_UPD_RATE(signal_db)	signal_db_upd_rate(0.25, (signal_db))
 #define	BRG_UPD_RATE(signal_db)		signal_db_upd_rate(1, (signal_db))
 #define	DME_UPD_RATE(signal_db)		signal_db_upd_rate(1, (signal_db))
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
@@ -89,7 +89,7 @@
 
 #define	NAVRAD_PARKED_BRG	90	/* bearing pointer parked pos */
 
-#define	MAX_DR_VALS		8
+#define	MAX_DR_VALS		16
 
 static bool_t inited = B_FALSE;
 
@@ -310,13 +310,15 @@ static struct {
 	dr_t		pitch;
 
 #if	USE_XPLANE_RADIO_DRS
-	dr_t		ap_steer_deg_mag;
-	dr_t		ovrd_nav_heading;
 	dr_t		ovrd_adf;
 	dr_t		ovrd_dme;
+#if	LIBRADIO_APCTL
 	dr_t		ovrd_ap;
-	dr_t		hsi_sel;
 	dr_t		ap_state;
+	dr_t		ap_steer_deg_mag;
+	dr_t		ovrd_nav_heading;
+#endif	/* LIBRADIO_APCTL */
+	dr_t		hsi_sel;
 	dr_t		hpath;
 	dr_t		ap_bc;
 #endif	/* USE_XPLANE_RADIO_DRS */
@@ -883,7 +885,9 @@ radio_adf_is_ant_mode(radio_t *radio)
 static void
 ap_drs_config(double d_t)
 {
+#if	LIBRADIO_APCTL
 	int ap_state = dr_geti(&drs.ap_state);
+#endif
 	int hsi_sel = dr_geti(&drs.hsi_sel);
 	radio_t *radio;
 	double beta, hdef, corr_def, intcpt, corr;
@@ -897,18 +901,22 @@ ap_drs_config(double d_t)
 		radio = &navrad.vloc_radios[1];
 		break;
 	default:
+#if	LIBRADIO_APCTL
 		dr_seti(&drs.ovrd_nav_heading, 0);
 		if (navrad.ap.ovrd_act) {
 			dr_seti(&drs.ovrd_ap, 0);
 			navrad.ap.ovrd_act = B_FALSE;
 		}
+#endif	/* LIBRADIO_APCTL */
 		return;
 	}
 	is_loc = is_valid_loc_freq(radio->freq / 1000000.0);
 
+#if	LIBRADIO_APCTL
 	if ((ap_state & AP_HNAV_ARM) && !(ap_state & AP_HNAV))
 		dr_seti(&drs.ap_state, AP_HNAV_ARM | AP_HNAV);
 	dr_seti(&drs.ovrd_nav_heading, 1);
+#endif	/* LIBRADIO_APCTL */
 
 	hdef = dr_getf(&radio->drs.vloc.hdef_pilot);
 	FILTER_IN(navrad.ap.hdef_rate, (hdef - navrad.ap.hdef_prev) / d_t, d_t,
@@ -956,10 +964,11 @@ ap_drs_config(double d_t)
 	    corr + beta);
 	FILTER_IN(navrad.ap.steer_tgt, intcpt, d_t,
 	    AP_STEER_UPD_RATE(radio->signal_db));
-	dr_setf(&drs.ap_steer_deg_mag, navrad.ap.steer_tgt);
 
 	navrad.ap.hdef_prev = hdef;
 
+#if	LIBRADIO_APCTL
+	dr_setf(&drs.ap_steer_deg_mag, navrad.ap.steer_tgt);
 	if ((ap_state & AP_GS_ARM) && (ap_state & AP_HNAV) &&
 	    ABS(radio->vdef) < AP_GS_CAPTURE_VDEF) {
 		dr_seti(&drs.ovrd_ap, 1);
@@ -974,6 +983,7 @@ ap_drs_config(double d_t)
 		dr_seti(&drs.ovrd_ap, 0);
 		navrad.ap.ovrd_act = B_FALSE;
 	}
+#endif	/* LIBRADIO_APCTL */
 }
 
 static void
@@ -2460,8 +2470,13 @@ radio_dme_update(radio_t *radio, double d_t)
 		if (ABS(navrad.cur_t - radio->dme_lock_t) <
 		    NAVRAD_LOCK_DELAY_DME)
 			return;
+#ifndef	LIBRADIO_BACKEND
 		FILTER_IN_NAN(radio->dme, dme, d_t,
 		    DME_UPD_RATE(radio->signal_db));
+#else	/* !defined(LIBRADIO_BACKEND) */
+		UNUSED(d_t);
+		radio->dme = dme;
+#endif	/* !defined(LIBRADIO_BACKEND) */
 	} else {
 		radio->dme = NAN;
 		radio->dme_lock_t = navrad.cur_t;
@@ -2545,19 +2560,21 @@ navrad_init2(navaiddb_t *db, unsigned num_dmes)
 	fdr_find(&drs.pitch, "sim/flightmodel/position/true_theta");
 
 #if	USE_XPLANE_RADIO_DRS
-	fdr_find(&drs.ap_steer_deg_mag,
-	    "sim/cockpit/autopilot/nav_steer_deg_mag");
-	fdr_find(&drs.ovrd_nav_heading,
-	    "sim/operation/override/override_nav_heading");
 	fdr_find(&drs.ovrd_adf, "sim/operation/override/override_adf");
 	fdr_find(&drs.ovrd_dme, "sim/operation/override/override_dme");
 	fdr_find(&drs.hsi_sel,
 	    "sim/cockpit2/radios/actuators/HSI_source_select_pilot");
-	fdr_find(&drs.ap_state, "sim/cockpit/autopilot/autopilot_state");
-	fdr_find(&drs.ap_bc, "sim/cockpit2/autopilot/backcourse_on");
 	fdr_find(&drs.hpath, "sim/flightmodel/position/hpath");
+	fdr_find(&drs.ap_bc, "sim/cockpit2/autopilot/backcourse_on");
 
+#if	LIBRADIO_APCTL
+	fdr_find(&drs.ap_steer_deg_mag,
+	    "sim/cockpit/autopilot/nav_steer_deg_mag");
 	fdr_find(&drs.ovrd_ap, "sim/operation/override/override_autopilot");
+	fdr_find(&drs.ap_state, "sim/cockpit/autopilot/autopilot_state");
+	fdr_find(&drs.ovrd_nav_heading,
+	    "sim/operation/override/override_nav_heading");
+#endif	/* LIBRADIO_APCTL */
 #endif	/* USE_XPLANE_RADIO_DRS */
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
@@ -2620,10 +2637,12 @@ navrad_fini(void)
 		radio_fini(&navrad.dme_radio[i]);
 
 #if	USE_XPLANE_RADIO_DRS
-	dr_seti(&drs.ovrd_nav_heading, 0);
 	dr_seti(&drs.ovrd_dme, 0);
 	dr_seti(&drs.ovrd_adf, 0);
+#if	LIBRADIO_APCTL
+	dr_seti(&drs.ovrd_nav_heading, 0);
 	dr_seti(&drs.ovrd_ap, 0);
+#endif	/* LIBRADIO_APCTL */
 #endif	/* USE_XPLANE_RADIO_DRS */
 
 	mutex_destroy(&navrad.lock);
