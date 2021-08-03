@@ -177,8 +177,8 @@ radio navigation datarefs:
     sim/cockpit/radios/nav2_vdef_dot2:
 	Same as nav{1,2}_vdef_dot2.
 
-    libradio/nav1/have_vor_sig = 0|1	[bool]
-    libradio/nav2/have_vor_sig = 0|1	[bool]
+    libradio/nav1/have_vor_signal = 0|1	[bool]
+    libradio/nav2/have_vor_signal = 0|1	[bool]
 	These are set to '1' when the NAV receiver is sensing the VOR VHF
 	carrier. The radial information might be extremely jittery at low
 	signal levels though, so be sure to look at the signal strength
@@ -243,3 +243,8 @@ radio navigation datarefs:
     sim/cockpit/radios/adf2_dir_degt:
 	Relative bearing output of the respective ADF. This is driven
 	off the NDB signals being received by the ADF.
+
+    libradio/adf1/have_ndb_signal = 0|1	[bool]
+    libradio/adf2/have_ndb_signal = 0|1	[bool]
+	These are set to '1' when the ADF receiver sees what looks like
+	an NDB signal carrier.
