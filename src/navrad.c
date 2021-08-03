@@ -1043,9 +1043,13 @@ ap_radio_drs_config_vloc(radio_t *radio)
 	} else {
 		dr_setf(&radio->drs.vloc.slope_degt, 0);
 	}
-
-	dr_setf(&radio->drs.vloc.vdef_pilot, 0);
-	dr_setf(&radio->drs.vloc.vdef_copilot, 0);
+	if (!isnan(radio->gp_ddm)) {
+		dr_setf(&radio->drs.vloc.vdef_pilot, -radio->gp_ddm / 0.0875);
+		dr_setf(&radio->drs.vloc.vdef_copilot, -radio->gp_ddm / 0.0875);
+	} else {
+		dr_setf(&radio->drs.vloc.vdef_pilot, 0);
+		dr_setf(&radio->drs.vloc.vdef_copilot, 0);
+	}
 }
 
 static void
