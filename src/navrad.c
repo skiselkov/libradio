@@ -66,8 +66,8 @@
 #define	HDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.25, (signal_db))
 #define	VDEF_RATE_UPD_RATE(signal_db)	signal_db_upd_rate(0.25, (signal_db))
 #define	AP_STEER_UPD_RATE(signal_db)	signal_db_upd_rate(0.25, (signal_db))
-#define	BRG_UPD_RATE(signal_db)		signal_db_upd_rate(1, (signal_db))
-#define	DME_UPD_RATE(signal_db)		signal_db_upd_rate(1, (signal_db))
+#define	BRG_UPD_RATE(signal_db)		signal_db_upd_rate(0.25, (signal_db))
+#define	DME_UPD_RATE(signal_db)		signal_db_upd_rate(0.25, (signal_db))
 #define	AP_GS_CAPTURE_VDEF	0.2	/* dots */
 #define	FLOOP_INTVAL		0.05	/* seconds */
 
@@ -182,6 +182,7 @@ struct radio_s {
 	bool_t		tofrom_pilot;
 	double		hdef_copilot;
 	bool_t		tofrom_copilot;
+	double		radial;
 	double		loc_ddm;
 	double		hdef_lock_t;
 	double		gs;
@@ -219,6 +220,19 @@ struct radio_s {
 		int		propmode;
 		dr_t		propmode_dr;
 	} dr_vals[MAX_DR_VALS];
+	struct {
+		int		have_loc_sig;
+		dr_t		have_loc_sig_dr;
+		int		have_vor_sig;
+		dr_t		have_vor_sig_dr;
+		int		have_gp_sig;
+		dr_t		have_gp_sig_dr;
+		int		have_ndb_sig;
+		dr_t		have_ndb_sig_dr;
+		dr_t		radial_dr;
+		dr_t		loc_ddm_dr;
+		dr_t		gp_ddm_dr;
+	} state_drs;
 
 #if	USE_XPLANE_RADIO_DRS
 	union {
@@ -1001,6 +1015,7 @@ ap_radio_drs_config_vloc(radio_t *radio)
 		dr_setf(&radio->drs.vloc.hdef_pilot, hdef);
 		dr_seti(&radio->drs.vloc.fromto_pilot, 1 + tofrom);
 	} else {
+		dr_setf(&radio->drs.vloc.hdef_pilot, 0);
 		dr_seti(&radio->drs.vloc.fromto_pilot, 0);
 	}
 
@@ -1010,6 +1025,7 @@ ap_radio_drs_config_vloc(radio_t *radio)
 		dr_setf(&radio->drs.vloc.hdef_copilot, hdef);
 		dr_seti(&radio->drs.vloc.fromto_copilot, 1 + tofrom);
 	} else {
+		dr_setf(&radio->drs.vloc.hdef_copilot, 0);
 		dr_seti(&radio->drs.vloc.fromto_copilot, 0);
 	}
 
@@ -1716,7 +1732,11 @@ navrad_type2str(navrad_type_t type)
 static void
 radio_init(radio_t *radio, int nr, navrad_type_t type)
 {
+	const char *name;
+
+	ASSERT(radio != NULL);
 	ASSERT3U(type, <=, NAVRAD_TYPE_DME);
+	name = navrad_type2str(type);
 
 	radio->type = type;
 	radio->nr = nr;
@@ -1757,7 +1777,6 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 #endif	/* USE_XPLANE_RADIO_DRS */
 
 	for (int i = 0; i < MAX_DR_VALS; i++) {
-		const char *name = navrad_type2str(radio->type);
 		dr_create_b(&radio->dr_vals[i].id_dr, radio->dr_vals[i].id,
 		    sizeof (radio->dr_vals[i].id), B_FALSE,
 		    "libradio/%s%d/navaid%d/id", name, nr, i);
@@ -1771,6 +1790,27 @@ radio_init(radio_t *radio, int nr, navrad_type_t type)
 		    &radio->dr_vals[i].propmode, B_FALSE,
 		    "libradio/%s%d/navaid%d/propmode", name, nr, i);
 	}
+	dr_create_i(&radio->state_drs.have_vor_sig_dr,
+	    &radio->state_drs.have_vor_sig, B_FALSE,
+	    "libradio/%s%d/have_vor_signal", name, nr);
+	dr_create_f64(&radio->state_drs.radial_dr, &radio->radial, B_FALSE,
+	    "libradio/%s%d/radial", name, nr);
+
+	dr_create_i(&radio->state_drs.have_loc_sig_dr,
+	    &radio->state_drs.have_loc_sig, B_FALSE,
+	    "libradio/%s%d/have_loc_signal", name, nr);
+	dr_create_f64(&radio->state_drs.loc_ddm_dr, &radio->loc_ddm, B_FALSE,
+	    "libradio/%s%d/loc_ddm", name, nr);
+
+	dr_create_i(&radio->state_drs.have_gp_sig_dr,
+	    &radio->state_drs.have_gp_sig, B_FALSE,
+	    "libradio/%s%d/have_gp_signal", name, nr);
+	dr_create_f64(&radio->state_drs.gp_ddm_dr, &radio->gp_ddm, B_FALSE,
+	    "libradio/%s%d/gp_ddm", name, nr);
+
+	dr_create_i(&radio->state_drs.have_ndb_sig_dr,
+	    &radio->state_drs.have_ndb_sig, B_FALSE,
+	    "libradio/%s%d/have_ndb_signal", name, nr);
 
 #if	USE_XPLANE_RADIO_DRS
 	switch (type) {
@@ -1857,6 +1897,13 @@ radio_fini(radio_t *radio)
 		dr_delete(&radio->dr_vals[i].signal_db_dr);
 		dr_delete(&radio->dr_vals[i].propmode_dr);
 	}
+	dr_delete(&radio->state_drs.have_vor_sig_dr);
+	dr_delete(&radio->state_drs.radial_dr);
+	dr_delete(&radio->state_drs.have_loc_sig_dr);
+	dr_delete(&radio->state_drs.loc_ddm_dr);
+	dr_delete(&radio->state_drs.have_gp_sig_dr);
+	dr_delete(&radio->state_drs.gp_ddm_dr);
+	dr_delete(&radio->state_drs.have_ndb_sig_dr);
 
 #if	USE_XPLANE_RADIO_DRS
 	if (radio->type == NAVRAD_TYPE_VLOC)
@@ -2164,6 +2211,7 @@ radio_comp_hdef_loc(radio_t *radio, double *ddm_p)
 		radio->loc_fcrs = NAN;
 		if (ddm_p != NULL)
 			*ddm_p = NAN;
+		radio->state_drs.have_loc_sig = B_FALSE;
 		return (NAN);
 	}
 	radio->loc_fcrs = nav->loc.brg;
@@ -2224,6 +2272,7 @@ radio_comp_hdef_loc(radio_t *radio, double *ddm_p)
 	ddm = clamp(ddm, -1, 1);
 	if (ddm_p != NULL)
 		*ddm_p = ddm;
+	radio->state_drs.have_loc_sig = B_TRUE;
 
 	return (ddm / HDEF_LOC_DDM_PER_DOT);
 }
@@ -2245,6 +2294,9 @@ radio_comp_hdef_vor(radio_t *radio, bool_t pilot, bool_t *tofrom_p)
 	UNUSED(pilot);
 	crs = radio->obs;
 #endif	/* USE_XPLANE_RADIO_DRS */
+
+	radio->radial = radial;
+	radio->state_drs.have_vor_sig = !isnan(radial);
 
 	if (isnan(radial) || isnan(crs))
 		return (NAN);
@@ -2274,9 +2326,12 @@ radio_hdef_update(radio_t *radio, bool_t pilot, double d_t)
 	if (is_valid_loc_freq(radio->freq / 1000000.0)) {
 		hdef = radio_comp_hdef_loc(radio, &radio->loc_ddm);
 		tofrom = B_FALSE;
+		radio->state_drs.have_vor_sig = B_FALSE;
+		radio->radial = NAN;
 	} else {
 		hdef = radio_comp_hdef_vor(radio, pilot, &tofrom);
 		radio->loc_ddm = NAN;
+		radio->state_drs.have_loc_sig = B_FALSE;
 	}
 #if	USE_XPLANE_RADIO_DRS
 	if (!isnan(hdef)) {
@@ -2343,13 +2398,15 @@ radio_vdef_update(radio_t *radio, double d_t)
 		radio->gp_ddm = NAN;
 		radio->gs = NAN;
 		radio->vdef_lock_t = navrad.cur_t;
+		radio->state_drs.have_gp_sig = B_FALSE;
 		return;
 	}
 	ASSERT3U(nav->type, ==, NAVAID_GS);
 
-	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY_VLOC)
+	if (ABS(navrad.cur_t - radio->vdef_lock_t) < NAVRAD_LOCK_DELAY_VLOC) {
+		radio->state_drs.have_gp_sig = B_FALSE;
 		return;
-
+	}
 	brg = normalize_hdg(brg_from_navaid(nav, &dist) + 180);
 	offpath = fabs(rel_hdg(brg, nav->gs.brg));
 	long_dist = dist * cos(DEG2RAD(offpath));
@@ -2405,6 +2462,7 @@ radio_vdef_update(radio_t *radio, double d_t)
 	 */
 	ddm_per_deg = (0.12 * nav->gs.gs) / 0.0875;
 	radio->gp_ddm = -vdef_deg / ddm_per_deg;
+	radio->state_drs.have_gp_sig = B_TRUE;
 
 #if	USE_XPLANE_RADIO_DRS
 	FILTER_IN_NAN(radio->vdef, vdef_dots, d_t, DEF_UPD_RATE(signal_db));
@@ -2431,6 +2489,8 @@ radio_brg_update(radio_t *radio, double d_t)
 		brg = radio_get_bearing(radio);
 
 #if	USE_XPLANE_RADIO_DRS
+	radio->state_drs.have_ndb_sig = (radio->type == NAVRAD_TYPE_ADF &&
+	    !isnan(brg));
 	if (!isnan(brg)) {
 		double lock_delay = (radio->type == NAVRAD_TYPE_ADF ?
 		    NAVRAD_LOCK_DELAY_ADF : NAVRAD_LOCK_DELAY_VLOC);
@@ -2448,7 +2508,7 @@ radio_brg_update(radio_t *radio, double d_t)
 		FILTER_IN(radio->brg, tgt, d_t, BRG_UPD_RATE(radio->signal_db));
 		radio->brg = normalize_hdg(radio->brg);
 	} else {
-		radio->brg = NAN;
+		FILTER_IN(radio->brg, 90, d_t, 0.25);
 		radio->brg_lock_t = navrad.cur_t;
 	}
 #else	/* !USE_XPLANE_RADIO_DRS */

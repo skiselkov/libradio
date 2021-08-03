@@ -177,6 +177,47 @@ radio navigation datarefs:
     sim/cockpit/radios/nav2_vdef_dot2:
 	Same as nav{1,2}_vdef_dot2.
 
+    libradio/nav1/have_vor_sig = 0|1	[bool]
+    libradio/nav2/have_vor_sig = 0|1	[bool]
+	These are set to '1' when the NAV receiver is sensing the VOR VHF
+	carrier. The radial information might be extremely jittery at low
+	signal levels though, so be sure to look at the signal strength
+	as well.
+
+    libradio/nav1/radial = 0-360	[float]
+    libradio/nav2/radial = 0-360	[float]
+	The raw radial information actually measured. Note that is really
+	is the ONLY information sent out by a VOR. The CDI deflection is
+	an entirely synthetic indication generated in a CDI instrument.
+
+    libradio/nav1/have_loc_signal = 0|1	[bool]
+    libradio/nav2/have_loc_signal = 0|1	[bool]
+	These are set to '1' when the NAV receiver is sensing the localizer
+	VHF carrier.
+
+    libradio/nav1/loc_ddm		[float]
+    libradio/nav2/loc_ddm		[float]
+	This is the raw difference-in-depth-of-modulation value for the
+	localizer VHF subcarriers. This is the only information actually
+	received from a localizer. libradio simulates signal distortion at
+	large angles from the localizer centerline, so don't trust the
+	value much beyond the standard +-0.155 as defined by ICAO Annex 10.
+	The signal is more-or-less linear only in this range. Beyond +-0.155,
+	the angle-to-DDM relationship can be significantly non-linear.
+
+    libradio/nav1/have_gp_signal = 0|1	[bool]
+    libradio/nav2/have_gp_signal = 0|1	[bool]
+	These are set to '1' when the NAV receiver is sensing the glidepath
+	VHF carrier.
+
+    libradio/nav1/gp_ddm		[float]
+    libradio/nav2/gp_ddm		[float]
+	This is the raw difference-in-depth-of-modulation value for the
+	glidepath VHF subcarriers. This is the only information actually
+	received for the glidepath. libradio simulates signal distortion
+	at large angles away from nearly-on-path, as well as false
+	reflected images at multiples of the nominal glidepath angle.
+
     ==================
     === DME radios ===
     ==================
