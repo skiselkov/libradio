@@ -1009,8 +1009,12 @@ ap_radio_drs_config_vloc(radio_t *radio)
 	ASSERT3U(radio->type, ==, NAVRAD_TYPE_VLOC);
 
 	dr_seti(&radio->drs.vloc.ovrd_nav_needles, 1);
+#if	LIBRADIO_DEF_CLAMP
 	hdef = clamp(radio_get_hdef(radio, B_TRUE, &tofrom), -HDEF_MAX_XP,
 	    HDEF_MAX_XP);
+#else	/* !LIBRADIO_DEF_CLAMP */
+	hdef = radio_get_hdef(radio, B_TRUE, &tofrom);
+#endif	/* !LIBRADIO_DEF_CLAMP */
 	if (!isnan(hdef)) {
 		dr_setf(&radio->drs.vloc.hdef_pilot, hdef);
 		dr_seti(&radio->drs.vloc.fromto_pilot, 1 + tofrom);
@@ -1018,9 +1022,12 @@ ap_radio_drs_config_vloc(radio_t *radio)
 		dr_setf(&radio->drs.vloc.hdef_pilot, 0);
 		dr_seti(&radio->drs.vloc.fromto_pilot, 0);
 	}
-
+#if	LIBRADIO_DEF_CLAMP
 	hdef = clamp(radio_get_hdef(radio, B_FALSE, &tofrom),
 	    -HDEF_MAX_XP, HDEF_MAX_XP);
+#else	/* !LIBRADIO_DEF_CLAMP */
+	hdef = radio_get_hdef(radio, B_FALSE, &tofrom);
+#endif	/* !LIBRADIO_DEF_CLAMP */
 	if (!isnan(hdef)) {
 		dr_setf(&radio->drs.vloc.hdef_copilot, hdef);
 		dr_seti(&radio->drs.vloc.fromto_copilot, 1 + tofrom);
@@ -1044,8 +1051,14 @@ ap_radio_drs_config_vloc(radio_t *radio)
 		dr_setf(&radio->drs.vloc.slope_degt, 0);
 	}
 	if (!isnan(radio->gp_ddm)) {
-		dr_setf(&radio->drs.vloc.vdef_pilot, -radio->gp_ddm / 0.0875);
-		dr_setf(&radio->drs.vloc.vdef_copilot, -radio->gp_ddm / 0.0875);
+#if	LIBRADIO_DEF_CLAMP
+		float dots = clamp(-radio->gp_ddm / 0.0875, -VDEF_MAX,
+		    VDEF_MAX);
+#else
+		float dots = -radio->gp_ddm / 0.0875;
+#endif
+		dr_setf(&radio->drs.vloc.vdef_pilot, dots);
+		dr_setf(&radio->drs.vloc.vdef_copilot, dots);
 	} else {
 		dr_setf(&radio->drs.vloc.vdef_pilot, 0);
 		dr_setf(&radio->drs.vloc.vdef_copilot, 0);
@@ -2470,7 +2483,9 @@ radio_vdef_update(radio_t *radio, double d_t)
 
 #if	USE_XPLANE_RADIO_DRS
 	FILTER_IN_NAN(radio->vdef, vdef_dots, d_t, DEF_UPD_RATE(signal_db));
+#if	LIBRADIO_DEF_CLAMP
 	radio->vdef = clamp(radio->vdef, -VDEF_MAX, VDEF_MAX);
+#endif
 	radio->gs = nav->gs.gs;
 
 	FILTER_IN(radio->vdef_rate, (radio->vdef - radio->vdef_prev) / d_t,
@@ -2557,11 +2572,19 @@ radio_get_hdef(radio_t *radio, bool_t pilot, bool_t *tofrom)
 	ASSERT(tofrom != NULL);
 	if (pilot && !isnan(radio->hdef_pilot)) {
 		*tofrom = radio->tofrom_pilot;
+#if	LIBRADIO_DEF_CLAMP
 		return (clamp(radio->hdef_pilot, -HDEF_MAX, HDEF_MAX));
+#else
+		return (radio->hdef_pilot);
+#endif
 	}
 	if (!pilot && !isnan(radio->hdef_copilot)) {
 		*tofrom = radio->tofrom_copilot;
+#if	LIBRADIO_DEF_CLAMP
 		return (clamp(radio->hdef_copilot, -HDEF_MAX, HDEF_MAX));
+#else
+		return (radio->hdef_copilot);
+#endif
 	}
 	return (NAN);
 }
