@@ -96,6 +96,8 @@ macx-clang {
 	    --static-openal --cflags")
 	LIBS += -L$$[LIBACFUTILS]/qmake/mac64 -lacfutils
 	LIBS += -F$$[LIBACFUTILS]/SDK/Libraries/Mac
+	LIBS += $$system("$$[LIBACFUTILS]/pkg-config-deps mac-64 \
+	    --static-openal --libs")
 	LIBS += -framework OpenGL
 	LIBS += -framework XPLM
 }
