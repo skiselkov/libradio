@@ -749,9 +749,6 @@ navaiddb_create(const char *xpdir, airportdb_t *adb)
 		lacf_free(path);
 	}
 
-	/* Flush out the by_arpt hash table, don't need it anymore */
-	htbl_empty(&db->by_arpt, NULL, NULL);
-
 	return (db);
 }
 
@@ -951,6 +948,26 @@ navaiddb_query(navaiddb_t *db, geo_pos2_t center, double radius,
 	airportdb_unlock(db->adb);
 
 	return (list);
+}
+
+const navaid_t *
+navaiddb_find_conflict_same_arpt(navaiddb_t *db, const navaid_t *srch)
+{
+	const list_t *l;
+
+	ASSERT(db != NULL);
+	ASSERT(srch != NULL);
+
+	l = htbl_lookup_multi(&db->by_arpt, &srch->type);
+	if (l == NULL)
+		return (NULL);
+	for (void *v = list_head(l); v != NULL; v = list_next(l, v)) {
+		const navaid_t *nav = HTBL_VALUE_MULTI(v);
+
+		if (srch->freq == nav->freq && srch != nav)
+			return (nav);
+	}
+	return (NULL);
 }
 
 void

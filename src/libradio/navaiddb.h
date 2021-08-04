@@ -165,6 +165,8 @@ double navaiddb_get_xp_elev(const navaid_t *nav);
 
 navaid_list_t *navaiddb_query(navaiddb_t *db, geo_pos2_t center,
     double radius, const char *id, uint64_t *freq, navaid_type_t *type);
+const navaid_t *navaiddb_find_conflict_same_arpt(navaiddb_t *db,
+    const navaid_t *srch);
 void navaiddb_list_free(navaid_list_t *list);
 
 const char *navaid_type2str(navaid_type_t type);

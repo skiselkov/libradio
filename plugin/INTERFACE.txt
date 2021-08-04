@@ -166,6 +166,14 @@ radio navigation datarefs:
 	Same as sim/cockpit/radios/nav{1,2}_hdef_dot, except for VORs,
 	the CDI deflection is calculated from "nav{1,2}_obs_deg_mag_copilot".
 
+    libradio/nav1/hdef_rate		[float]
+    libradio/nav2/hdef_rate		[float]
+	This is the rate at which the HDEF is changing in dots/s. Notice
+	that this is independent of the cockpit instrumentation side. The
+	value is simply computed from the underlying radial/s or DDM/s
+	rate of change. This should help prevent derivative kick when the
+	pilot changes their CDI course setting.
+
     sim/cockpit/radios/nav1_vdef_dot:
     sim/cockpit/radios/nav2_vdef_dot:
 	Driven from the "nav1" and "nav2" radio glideslope signal. This is
@@ -176,6 +184,12 @@ radio navigation datarefs:
     sim/cockpit/radios/nav1_vdef_dot2:
     sim/cockpit/radios/nav2_vdef_dot2:
 	Same as nav{1,2}_vdef_dot2.
+
+    libradio/nav1/vdef_rate		[float]
+    libradio/nav2/vdef_rate		[float]
+	This is the rate at which the VDEF is changing in dots/s. The
+	value is simply computed from the underlying glidepath DDM/s
+	rate of change.
 
     libradio/nav1/have_vor_signal = 0|1	[bool]
     libradio/nav2/have_vor_signal = 0|1	[bool]
@@ -189,6 +203,10 @@ radio navigation datarefs:
 	The raw radial information actually measured. Note that is really
 	is the ONLY information sent out by a VOR. The CDI deflection is
 	an entirely synthetic indication generated in a CDI instrument.
+
+    libradio/nav1/radial		[float]
+    libradio/nav2/radial		[float]
+	This is the rate at which the VOR radial is changing in deg/s.
 
     libradio/nav1/have_loc_signal = 0|1	[bool]
     libradio/nav2/have_loc_signal = 0|1	[bool]
@@ -205,6 +223,10 @@ radio navigation datarefs:
 	The signal is more-or-less linear only in this range. Beyond +-0.155,
 	the angle-to-DDM relationship can be significantly non-linear.
 
+    libradio/nav1/loc_ddm_rate		[float]
+    libradio/nav2/loc_ddm_rate		[float]
+	This is the rate at which the localizer DDM is changing in DDM/s.
+
     libradio/nav1/have_gp_signal = 0|1	[bool]
     libradio/nav2/have_gp_signal = 0|1	[bool]
 	These are set to '1' when the NAV receiver is sensing the glidepath
@@ -217,6 +239,10 @@ radio navigation datarefs:
 	received for the glidepath. libradio simulates signal distortion
 	at large angles away from nearly-on-path, as well as false
 	reflected images at multiples of the nominal glidepath angle.
+
+    libradio/nav1/gp_ddm_rate		[float]
+    libradio/nav2/gp_ddm_rate		[float]
+	This is the rate at which the glidepath DDM is changing in DDM/s.
 
     ==================
     === DME radios ===
