@@ -204,8 +204,8 @@ radio navigation datarefs:
 	is the ONLY information sent out by a VOR. The CDI deflection is
 	an entirely synthetic indication generated in a CDI instrument.
 
-    libradio/nav1/radial		[float]
-    libradio/nav2/radial		[float]
+    libradio/nav1/radial_rate		[float]
+    libradio/nav2/radial_rate		[float]
 	This is the rate at which the VOR radial is changing in deg/s.
 
     libradio/nav1/have_loc_signal = 0|1	[bool]
