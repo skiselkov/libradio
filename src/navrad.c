@@ -19,8 +19,10 @@
 #include <time.h>
 
 #include <XPLMDisplay.h>
+#include <XPLMGraphics.h>
 #include <XPLMPlugin.h>
 #include <XPLMProcessing.h>
+#include <XPLMScenery.h>
 #include <XPLMUtilities.h>
 
 #include <acfutils/crc64.h>
@@ -285,6 +287,8 @@ static struct {
 
 	mutex_t			lock;
 	geo_pos3_t		pos;
+	double			hgt_agl;	/* m */
+	double			hdgt;
 	double			magvar;
 	double			cur_t;
 	double			last_t;
@@ -900,22 +904,57 @@ shutoff_conflicting_NDB(const navaid_t *nav)
 	return (d1 > d2);
 }
 
+static bool_t
+shutoff_conflicting_LOC(const navaid_t *nav1, const navaid_t *nav2)
+{
+	ASSERT(nav1 != NULL);
+	ASSERT(nav2 != NULL);
+	/*
+	 * Special case handling - when looking at paired
+	 * LOCs with the same freq, we need to kill the LOC
+	 * that's closer to us. That would be reverse-direction
+	 * transmitter. This way, we'll switch localizers only
+	 * when passing abeam the runway midpoint.
+	 */
+	if (navrad.hgt_agl >= FEET2MET(100)) {
+		geo_pos2_t my_pos = TO_GEO2(navrad.pos);
+		double d1 = gc_distance(my_pos, TO_GEO2(nav1->pos));
+		double d2 = gc_distance(my_pos, TO_GEO2(nav2->pos));
+		return (d1 < d2);
+	} else {
+		/*
+		 * When directly over the runway, we want to keep the same
+		 * localizer for the entire length of the rollout, to help
+		 * facilitate autolands. So in that case, we simply go based
+		 * on whichever station bearing we are closer to.
+		 */
+		double rbrg1 = rel_hdg(navrad.hdgt, nav1->loc.brg);
+		double rbrg2 = rel_hdg(navrad.hdgt, nav2->loc.brg);
+		return (fabs(rbrg1) > fabs(rbrg2));
+	}
+}
+
 static void
 signal_levels_update(avl_tree_t *tree, double d_t, fpp_t *fpp,
     avl_tree_t *vlocs_tree)
 {
 	for (radio_navaid_t *rnav = avl_first(tree); rnav != NULL;
 	    rnav = AVL_NEXT(tree, rnav)) {
-		bool_t has_bc = (find_conflicting_navaid(tree, rnav) == NULL);
+		const navaid_t *nav2 = find_conflicting_navaid(tree, rnav);
+		bool_t has_bc = (nav2 == NULL);
 		double brg = NAN;
 
 		if (rnav->radio->type == NAVRAD_TYPE_ADF &&
 		    shutoff_conflicting_NDB(rnav->navaid)) {
-			
 			/*
 			 * Special case handling - some airports use same-
 			 * frequency NDBs.
 			 */
+			rnav->signal_db = -200;
+			continue;
+		}
+		if (nav2 != NULL && nav2->type == NAVAID_LOC &&
+		    shutoff_conflicting_LOC(rnav->navaid, nav2)) {
 			rnav->signal_db = -200;
 			continue;
 		}
@@ -1732,6 +1771,10 @@ radio_update_rates(radio_t *radio, double d_t)
 static float
 floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 {
+	XPLMProbeInfo_t info = { .structSize = sizeof (info) };
+	XPLMProbeRef probe = XPLMCreateProbe(xplm_ProbeY);
+	XPLMProbeResult res;
+	vect3_t pos3d;
 	double d_t;
 
 	UNUSED(elapsed1);
@@ -1754,7 +1797,24 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 	navrad.pos = GEO_POS3(dr_getf(&drs.lat), dr_getf(&drs.lon),
 	    dr_getf(&drs.elev));
 	navrad.magvar = dr_getf(&drs.magvar);
+	navrad.hdgt = dr_getf(&drs.hdg);
 	mutex_exit(&navrad.lock);
+
+	XPLMWorldToLocal(navrad.pos.lat, navrad.pos.lon, navrad.pos.elev,
+	    &pos3d.x, &pos3d.y, &pos3d.z);
+	res = XPLMProbeTerrainXYZ(probe, pos3d.x, pos3d.y, pos3d.z, &info);
+	if (res != xplm_ProbeHitTerrain) {
+		logMsg("XPLMProbeTerrainXYZ returned error: %d", res);
+	} else {
+		geo_pos3_t gnd_pos;
+
+		XPLMDestroyProbe(probe);
+		XPLMLocalToWorld(info.locationX, info.locationY, info.locationZ,
+		    &gnd_pos.lat, &gnd_pos.lon, &gnd_pos.elev);
+		mutex_enter(&navrad.lock);
+		navrad.hgt_agl = navrad.pos.elev - gnd_pos.elev;
+		mutex_exit(&navrad.lock);
+	}
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
 		radio_floop_cb(&navrad.vloc_radios[i], d_t);
