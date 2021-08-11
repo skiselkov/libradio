@@ -168,11 +168,13 @@ radio navigation datarefs:
 
     libradio/nav1/hdef_rate		[float]
     libradio/nav2/hdef_rate		[float]
-	This is the rate at which the HDEF is changing in dots/s. Notice
-	that this is independent of the cockpit instrumentation side. The
-	value is simply computed from the underlying radial/s or DDM/s
-	rate of change. This should help prevent derivative kick when the
-	pilot changes their CDI course setting.
+    libradio/nav1/hdef_rate2		[float]
+    libradio/nav2/hdef_rate2		[float]
+	This is the rate at which the HDEF is changing in dots/s. The
+	`hdef_rate' version is for the left CDI, `hdef_rate2' is for the
+	right CDI. The value is simply computed from the underlying
+	radial/s or DDM/s rate of change. This should help prevent
+	derivative kick when the pilot adjusts their CDI course setting.
 
     sim/cockpit/radios/nav1_vdef_dot:
     sim/cockpit/radios/nav2_vdef_dot:
