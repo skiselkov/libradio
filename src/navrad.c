@@ -91,7 +91,7 @@
 
 #define	NAVRAD_PARKED_BRG	90	/* bearing pointer parked pos */
 
-#define	MAX_DR_VALS		16
+#define	MAX_DR_VALS		64
 
 static bool_t inited = B_FALSE;
 
@@ -620,49 +620,49 @@ libradio_compute_signal_prop(geo_pos3_t p1, geo_pos3_t p2, double p1_min_hgt,
 static void
 comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 {
-	const vect2_t adf_dist_curve[] = {
+	static const vect2_t adf_dist_curve[] = {
 	    VECT2(NM2MET(0), -50),
 	    VECT2(NM2MET(20), -50),
 	    VECT2(NM2MET(120), 0),
 	    VECT2(NM2MET(130), 0),
 	    NULL_VECT2
 	};
-	const vect2_t vor_dist_curve[] = {
+	static const vect2_t vor_dist_curve[] = {
 	    VECT2(NM2MET(0), -20),
 	    VECT2(NM2MET(20), -20),
 	    VECT2(NM2MET(100), 0),
 	    VECT2(NM2MET(120), 0),
 	    NULL_VECT2
 	};
-	const vect2_t dme_dist_curve[] = {
+	static const vect2_t dme_dist_curve[] = {
 	    VECT2(NM2MET(0), 0),
 	    VECT2(NM2MET(20), 0),
 	    VECT2(NM2MET(100), 20),
 	    VECT2(NM2MET(120), 20),
 	    NULL_VECT2
 	};
-	const vect2_t ils_dme_dist_curve[] = {
+	static const vect2_t ils_dme_dist_curve[] = {
 	    VECT2(NM2MET(0), -9),
 	    VECT2(NM2MET(20), -9),
 	    VECT2(NM2MET(100), 11),
 	    VECT2(NM2MET(120), 11),
 	    NULL_VECT2
 	};
-	const vect2_t loc_dist_curve[] = {
+	static const vect2_t loc_dist_curve[] = {
 	    VECT2(NM2MET(0), -30),
 	    VECT2(NM2MET(10), -30),
 	    VECT2(NM2MET(40), -20),
 	    VECT2(NM2MET(50), -20),
 	    NULL_VECT2
 	};
-	const vect2_t gs_dist_curve[] = {
+	static const vect2_t gs_dist_curve[] = {
 	    VECT2(NM2MET(0), -25),
 	    VECT2(NM2MET(10), -25),
 	    VECT2(NM2MET(40), -15),
 	    VECT2(NM2MET(50), -15),
 	    NULL_VECT2
 	};
-	const vect2_t loc_rbrg_curve[] = {
+	static const vect2_t loc_rbrg_curve[] = {
 	    VECT2(0, 0),
 	    VECT2(30, -5),
 	    VECT2(60, -10),
@@ -672,14 +672,14 @@ comp_signal_db(radio_navaid_t *rnav, fpp_t *fpp, bool_t has_bc, double brg)
 	    VECT2(180, -3),
 	    NULL_VECT2
 	};
-	const vect2_t loc_rbrg_nobc_curve[] = {
+	static const vect2_t loc_rbrg_nobc_curve[] = {
 	    VECT2(0, 0),
 	    VECT2(30, -5),
 	    VECT2(60, -15),
 	    VECT2(90, -30),
 	    NULL_VECT2
 	};
-	const vect2_t gs_rbrg_curve[] = {
+	static const vect2_t gs_rbrg_curve[] = {
 	    VECT2(0, 0),
 	    VECT2(20, -5),
 	    VECT2(60, -10),
