@@ -21,7 +21,7 @@ respective radio by reading the following datarefs:
 
 For each of these radios, you can read the details of the signal levels.
 Each radio can receive multiple navaids at the same time. libradio gives
-you signal levels for the top 16 navaids within a 300 NM radius.
+you signal levels for the top 64 navaids within a 300 NM radius.
 
     libradio/<radio>/navaid{0-15}/type		type: int
 	This is the respective navaid type. The type is one of the
