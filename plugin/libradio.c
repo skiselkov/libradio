@@ -44,6 +44,7 @@ static navaiddb_t	*ndb = NULL;
 const egpws_intf_t	*egpws_intf = NULL;
 
 PLUGIN_API void XPluginStop(void);
+PLUGIN_API void XPluginDisable(void);
 
 static void
 log_dbg_string(const char *str)
@@ -136,11 +137,6 @@ XPluginStart(char *name, char *sig, char *desc)
 		logMsg("navrad_init failed, bailing");
 		goto errout;
 	}
-	logMsg("opengpws_intf_init");
-	if (!opengpws_intf_init()) {
-		logMsg("opengpws_intf_init failed, bailing");
-		goto errout;
-	}
 	logMsg("libradio.plugin load complete");
 
 	return (1);
@@ -159,6 +155,7 @@ XPluginStop(void)
 	inited = false;
 
 	logMsg("navrad_fini");
+
 	navrad_fini();
 	if (ndb != NULL) {
 		logMsg("navaiddb_destroy");
@@ -168,16 +165,22 @@ XPluginStop(void)
 	logMsg("airportdb_destroy");
 	airportdb_destroy(&adb);
 
-	navrad_fini();
-
 	logMsg("libradio.plugin unload complete");
 	log_fini();
 }
 
-PLUGIN_API void
+PLUGIN_API int
 XPluginEnable(void)
 {
-	/* no-op */
+	logMsg("opengpws_intf_init");
+	if (!opengpws_intf_init()) {
+		logMsg("opengpws_intf_init failed, bailing");
+		goto errout;
+	}
+	return (1);
+errout:
+	XPluginDisable();
+	return (0);
 }
 
 PLUGIN_API void
