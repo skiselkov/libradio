@@ -43,73 +43,12 @@ static airportdb_t	adb = {};
 static navaiddb_t	*ndb = NULL;
 const egpws_intf_t	*egpws_intf = NULL;
 
+PLUGIN_API void XPluginStop(void);
+
 static void
 log_dbg_string(const char *str)
 {
 	XPLMDebugString(str);
-}
-
-PLUGIN_API int
-XPluginStart(char *name, char *sig, char *desc)
-{
-	uint64_t seed;
-
-	/* Always use Unix-native paths on the Mac! */
-	XPLMEnableFeature("XPLM_USE_NATIVE_PATHS", 1);
-	XPLMEnableFeature("XPLM_USE_NATIVE_WIDGET_WINDOWS", 1);
-
-	XPLMGetSystemPath(xpdir);
-	fix_pathsep(xpdir);
-	/* Strip a trailing '/' from xpdir */
-	if (xpdir[strlen(xpdir) - 1] == '/' ||
-	    xpdir[strlen(xpdir) - 1] == '\\') {
-		xpdir[strlen(xpdir) - 1] = '\0';
-	}
-	log_init(log_dbg_string, "libradio.plugin");
-	logMsg("This is libradio.plugin");
-
-	crc64_init();
-	if (!osrand(&seed, sizeof (seed)))
-		seed = microclock() + clock();
-	crc64_srand(seed);
-
-	strcpy(name, PLUGIN_NAME);
-	strcpy(sig, PLUGIN_SIG);
-	strcpy(desc, PLUGIN_DESCRIPTION);
-
-	logMsg("libradio.plugin load complete");
-
-	return (1);
-}
-
-PLUGIN_API void
-XPluginStop(void)
-{
-	logMsg("libradio.plugin is unloading");
-
-	navrad_fini();
-
-	logMsg("libradio.plugin unload complete");
-	log_fini();
-}
-
-PLUGIN_API void
-XPluginDisable(void)
-{
-	if (!inited)
-		return;
-	inited = false;
-
-	logMsg("navrad_fini");
-	navrad_fini();
-	if (ndb != NULL) {
-		logMsg("navaiddb_destroy");
-		navaiddb_destroy(ndb);
-		ndb = NULL;
-	}
-	logMsg("airportdb_destroy");
-	airportdb_destroy(&adb);
-	logMsg("libradio.plugin disable complete");
 }
 
 static bool
@@ -146,12 +85,36 @@ opengpws_intf_init(void)
 }
 
 PLUGIN_API int
-XPluginEnable(void)
+XPluginStart(char *name, char *sig, char *desc)
 {
+	uint64_t seed;
 	char *cachedir;
 
 	ASSERT(!inited);
 	inited = true;
+
+	/* Always use Unix-native paths on the Mac! */
+	XPLMEnableFeature("XPLM_USE_NATIVE_PATHS", 1);
+	XPLMEnableFeature("XPLM_USE_NATIVE_WIDGET_WINDOWS", 1);
+
+	XPLMGetSystemPath(xpdir);
+	fix_pathsep(xpdir);
+	/* Strip a trailing '/' from xpdir */
+	if (xpdir[strlen(xpdir) - 1] == '/' ||
+	    xpdir[strlen(xpdir) - 1] == '\\') {
+		xpdir[strlen(xpdir) - 1] = '\0';
+	}
+	log_init(log_dbg_string, "libradio.plugin");
+	logMsg("This is libradio.plugin");
+
+	crc64_init();
+	if (!osrand(&seed, sizeof (seed)))
+		seed = microclock() + clock();
+	crc64_srand(seed);
+
+	strcpy(name, PLUGIN_NAME);
+	strcpy(sig, PLUGIN_SIG);
+	strcpy(desc, PLUGIN_DESCRIPTION);
 
 	logMsg("airportdb_create");
 	cachedir = mkpathname(xpdir, "Output", "caches",
@@ -178,12 +141,49 @@ XPluginEnable(void)
 		logMsg("opengpws_intf_init failed, bailing");
 		goto errout;
 	}
-	logMsg("libradio.plugin enable complete");
+	logMsg("libradio.plugin load complete");
 
 	return (1);
 errout:
-	XPluginDisable();
+	XPluginStop();
 	return (0);
+}
+
+PLUGIN_API void
+XPluginStop(void)
+{
+	logMsg("libradio.plugin is unloading");
+
+	if (!inited)
+		return;
+	inited = false;
+
+	logMsg("navrad_fini");
+	navrad_fini();
+	if (ndb != NULL) {
+		logMsg("navaiddb_destroy");
+		navaiddb_destroy(ndb);
+		ndb = NULL;
+	}
+	logMsg("airportdb_destroy");
+	airportdb_destroy(&adb);
+
+	navrad_fini();
+
+	logMsg("libradio.plugin unload complete");
+	log_fini();
+}
+
+PLUGIN_API void
+XPluginEnable(void)
+{
+	/* no-op */
+}
+
+PLUGIN_API void
+XPluginDisable(void)
+{
+	/* no-op */
 }
 
 PLUGIN_API void
