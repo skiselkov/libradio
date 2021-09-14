@@ -98,7 +98,8 @@ macx-clang {
 	LIBS += -F$$[LIBACFUTILS]/SDK/Libraries/Mac
 	LIBS += $$system("$$[LIBACFUTILS]/pkg-config-deps mac-64 \
 	    --static-openal --libs")
-	LIBS += -framework OpenGL
+	LIBS += -framework OpenGL -framework CoreFoundation
+	LIBS += -framework CoreAudio -framework AudioUnit
 	LIBS += -framework XPLM
 }
 
