@@ -26,7 +26,7 @@ INCLUDEPATH += $$[LIBACFUTILS]/glew
 INCLUDEPATH += $$[LIBACFUTILS]/cglm/cglm-0.4.1/include
 INCLUDEPATH += $$[OPENGPWS]/api
 INCLUDEPATH += ../../src
-QMAKE_CFLAGS += -std=c99 -O2 -g -W -Wall -Wextra -Werror -fvisibility=hidden \
+QMAKE_CFLAGS += -std=c11 -O0 -g -W -Wall -Wextra -Werror -fvisibility=hidden \
     -Wno-missing-field-initializers
 QMAKE_CFLAGS += -Wunused-result
 

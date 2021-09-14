@@ -98,6 +98,9 @@ bool_t navrad_init(navaiddb_t *db);
 bool_t navrad_init2(navaiddb_t *db, unsigned num_dmes);
 void navrad_fini(void);
 
+void navrad_worker_start(void);
+void navrad_worker_stop(void);
+
 void navrad_set_freq(navrad_type_t type, unsigned nr, uint64_t freq);
 void navrad_set_failed(navrad_type_t type, unsigned nr, bool_t flag);
 

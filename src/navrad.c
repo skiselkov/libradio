@@ -2879,8 +2879,7 @@ navrad_init2(navaiddb_t *db, unsigned num_dmes)
 
 	XPLMRegisterFlightLoopCallback(get_gpws_intf_cb, -1, NULL);
 
-	worker_init(&navrad.worker, worker_cb, WORKER_INTVAL, NULL,
-	    "navrad-worker");
+	navrad_worker_start();
 
 	return (B_TRUE);
 }
@@ -2896,7 +2895,7 @@ navrad_fini(void)
 	 * Must go ahead profile_debug destruction to guarantee that
 	 * the navrad worker won't try to use destroyed locks.
 	 */
-	worker_fini(&navrad.worker);
+	navrad_worker_stop();
 
 	XPLMUnregisterFlightLoopCallback(get_gpws_intf_cb, NULL);
 
@@ -2929,6 +2928,24 @@ navrad_fini(void)
 
 	mutex_destroy(&navrad.lock);
 	XPLMUnregisterFlightLoopCallback(floop_cb, NULL);
+}
+
+void
+navrad_worker_start(void)
+{
+	ASSERT(inited);
+	if (!navrad.worker.run) {
+		worker_init(&navrad.worker, worker_cb, WORKER_INTVAL, NULL,
+		    "navrad-worker");
+	}
+}
+
+void
+navrad_worker_stop(void)
+{
+	if (!inited)
+		return;
+	worker_fini(&navrad.worker);
 }
 
 static radio_t *

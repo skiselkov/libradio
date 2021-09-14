@@ -30,6 +30,8 @@
 
 #include <opengpws/xplane_api.h>
 
+#include "libradio_plugin.h"
+#include "snd_sys.h"
 #include "../src/libradio/navaiddb.h"
 #include "../src/libradio/navrad.h"
 
@@ -39,6 +41,7 @@
 
 static bool		inited = false;
 static char		xpdir[512] = { 0 };
+static char		plugindir[512] = { 0 };
 static airportdb_t	adb = {};
 static navaiddb_t	*ndb = NULL;
 const egpws_intf_t	*egpws_intf = NULL;
@@ -89,7 +92,7 @@ PLUGIN_API int
 XPluginStart(char *name, char *sig, char *desc)
 {
 	uint64_t seed;
-	char *cachedir;
+	char *cachedir, *p;
 
 	ASSERT(!inited);
 	inited = true;
@@ -105,6 +108,23 @@ XPluginStart(char *name, char *sig, char *desc)
 	    xpdir[strlen(xpdir) - 1] == '\\') {
 		xpdir[strlen(xpdir) - 1] = '\0';
 	}
+	XPLMGetPluginInfo(XPLMGetMyID(), NULL, plugindir, NULL, NULL);
+#if	IBM
+	fix_pathsep(xpdir);
+	fix_pathsep(plugindir);
+#endif	/* !IBM */
+	/* cut off the trailing path component (our filename) */
+	if ((p = strrchr(plugindir, DIRSEP)) != NULL)
+		*p = '\0';
+	/* cut off an optional '32' or '64' trailing component */
+	if ((p = strrchr(plugindir, DIRSEP)) != NULL) {
+		if (strcmp(p + 1, "64") == 0 || strcmp(p + 1, "32") == 0 ||
+		    strcmp(p + 1, "win_x64") == 0 ||
+		    strcmp(p + 1, "mac_x64") == 0 ||
+		    strcmp(p + 1, "lin_x64") == 0)
+			*p = '\0';
+	}
+
 	log_init(log_dbg_string, "libradio.plugin");
 	logMsg("This is libradio.plugin");
 
@@ -177,6 +197,11 @@ XPluginEnable(void)
 		logMsg("opengpws_intf_init failed, bailing");
 		goto errout;
 	}
+	if (!snd_sys_init()) {
+		logMsg("snd_sys_init failed, bailing");
+		goto errout;
+	}
+	navrad_worker_start();
 	return (1);
 errout:
 	XPluginDisable();
@@ -186,7 +211,8 @@ errout:
 PLUGIN_API void
 XPluginDisable(void)
 {
-	/* no-op */
+	snd_sys_fini();
+	navrad_worker_stop();
 }
 
 PLUGIN_API void
@@ -195,4 +221,16 @@ XPluginReceiveMessage(XPLMPluginID from, int msg, void *param)
 	UNUSED(from);
 	UNUSED(msg);
 	UNUSED(param);
+}
+
+const char *
+get_xpdir(void)
+{
+	return (xpdir);
+}
+
+const char *
+get_plugindir(void)
+{
+	return (plugindir);
 }
