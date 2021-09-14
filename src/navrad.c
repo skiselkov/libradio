@@ -2943,8 +2943,6 @@ navrad_worker_start(void)
 void
 navrad_worker_stop(void)
 {
-	if (!inited)
-		return;
 	worker_fini(&navrad.worker);
 }
 
