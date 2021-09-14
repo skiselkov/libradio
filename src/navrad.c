@@ -1703,7 +1703,7 @@ profile_debug_floop(void)
 	}
 }
 
-static void
+UNUSED_ATTR static void
 radio_update_rates(radio_t *radio, double d_t)
 {
 	ASSERT(radio != NULL);
