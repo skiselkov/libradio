@@ -23,7 +23,7 @@ For each of these radios, you can read the details of the signal levels.
 Each radio can receive multiple navaids at the same time. libradio gives
 you signal levels for the top 64 navaids within a 300 NM radius.
 
-    libradio/<radio>/navaid{0-15}/type		type: int
+    libradio/<radio>/navaid{0-63}/type		type: int
 	This is the respective navaid type. The type is one of the
 	following possible values:
 	    1	- NDB
@@ -36,12 +36,12 @@ you signal levels for the top 64 navaids within a 300 NM radius.
 	    128	- Landing Threshold Point (unused)
 	    256	- GLS ground station (unused)
 
-    libradio/<radio>/navaid{0-15}/id		type: up to 12 bytes
+    libradio/<radio>/navaid{0-63}/id		type: up to 12 bytes
 	This is the identifier of the originating station. This really is
 	meant for debugging purposes and doesn't imply that the station can
 	be received. The identifier is returned as NUL-terminated string.
 
-    libradio/<radio>/navaid{0-15}/signal_db	type: float
+    libradio/<radio>/navaid{0-63}/signal_db	type: float
 	The signal intensity from the respective station in dBmW. This will
 	most typically be a negative value. Values greater than -50 dB are
 	usually excellent signal quality. Between -50 dB and -70 dB signal
@@ -52,7 +52,7 @@ you signal levels for the top 64 navaids within a 300 NM radius.
 	carrier, meaning, the signal is lost (CDI deflection not displaying,
 	DME not reading any distance, etc.)
 
-    libradio/<radio>/navaid{0-15}/propmode	type: int
+    libradio/<radio>/navaid{0-63}/propmode	type: int
 	This is for debugging purposes and denotes the strongest signal
 	propagation mode computed by the underlying Longley-Rice radio
 	model. The possible values are:
@@ -80,7 +80,7 @@ Example values:
     libradio/nav1/navaid3/id = ""
     libradio/nav1/navaid3/signal_db = 0
     libradio/nav1/navaid3/propmode = -1
-    ... (etc for remaining navaid slots) ...
+    ... (etc. for remaining navaid slots, up to and incoming 63)
 
     Notice that each transmission type (VOR and DME) is represented as a
     separate navaid with its own signal strength and propagation mode.
