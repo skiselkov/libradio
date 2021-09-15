@@ -80,7 +80,7 @@ Example values:
     libradio/nav1/navaid3/id = ""
     libradio/nav1/navaid3/signal_db = 0
     libradio/nav1/navaid3/propmode = -1
-    ... (etc. for remaining navaid slots, up to and incoming 63)
+    ... (etc. for remaining navaid slots, up to and including 63)
 
     Notice that each transmission type (VOR and DME) is represented as a
     separate navaid with its own signal strength and propagation mode.
