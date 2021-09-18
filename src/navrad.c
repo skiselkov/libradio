@@ -47,7 +47,7 @@
 #define	MIN_DELTA_T		0.01
 #define	NAVAID_SRCH_RANGE	NM2MET(300)
 #define	ANT_BASE_GAIN		92.0	/* dB */
-#define	INTERFERENCE_LIMIT	16.0	/* dB */
+#define	INTERFERENCE_LIMIT	12.0	/* dB */
 #define	NOISE_LEVEL_AUDIO	-55.0	/* dB */
 #define	NOISE_FLOOR_AUDIO	-80.0	/* dB */
 #define	NOISE_FLOOR_ERROR_RATE	-79.0	/* dB */
