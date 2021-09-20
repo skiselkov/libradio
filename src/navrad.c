@@ -356,6 +356,13 @@ static struct {
 #endif	/* USE_XPLANE_RADIO_DRS */
 } drs;
 
+static struct {
+	mutex_t		lock;
+	char		ID[NUM_NAVAID_FAILS][8];
+	navaid_type_t	type[NUM_NAVAID_FAILS];
+	bool_t		failed[NUM_NAVAID_FAILS];
+} navaid_fail = {};
+
 static const char *morse_table[] = {
     "00000",	/* 0 */
     "10000",	/* 1 */
@@ -934,6 +941,26 @@ shutoff_conflicting_LOC(const navaid_t *nav1, const navaid_t *nav2)
 	}
 }
 
+static bool_t
+navaid_is_failed(const char *ID, navaid_type_t type)
+{
+	bool_t result = B_FALSE;
+
+	ASSERT(ID != NULL);
+
+	mutex_enter(&navaid_fail.lock);
+	for (int i = 0; i < NUM_NAVAID_FAILS; i++) {
+		if (strcmp(navaid_fail.ID[i], ID) == 0 &&
+		    (navaid_fail.type[i] & type) && navaid_fail.failed[i]) {
+			result = B_TRUE;
+			break;
+		}
+	}
+	mutex_exit(&navaid_fail.lock);
+
+	return (result);
+}
+
 static void
 signal_levels_update(avl_tree_t *tree, double d_t, fpp_t *fpp,
     avl_tree_t *vlocs_tree)
@@ -955,6 +982,10 @@ signal_levels_update(avl_tree_t *tree, double d_t, fpp_t *fpp,
 		}
 		if (nav2 != NULL && nav2->type == NAVAID_LOC &&
 		    shutoff_conflicting_LOC(rnav->navaid, nav2)) {
+			rnav->signal_db = -200;
+			continue;
+		}
+		if (navaid_is_failed(rnav->navaid->id, rnav->navaid->type)) {
 			rnav->signal_db = -200;
 			continue;
 		}
@@ -2827,10 +2858,13 @@ navrad_init2(navaiddb_t *db, unsigned num_dmes)
 
 	memset(&navrad, 0, sizeof (navrad));
 	memset(&profile_debug, 0, sizeof (profile_debug));
+	memset(&navaid_fail, 0, sizeof (navaid_fail));
 
 	navrad.db = db;
 	navrad.num_dmes = num_dmes;
 	mutex_init(&navrad.lock);
+
+	mutex_init(&navaid_fail.lock);
 
 	fdr_find(&drs.lat, "sim/flightmodel/position/latitude");
 	fdr_find(&drs.lon, "sim/flightmodel/position/longitude");
@@ -2928,6 +2962,7 @@ navrad_fini(void)
 
 	mutex_destroy(&navrad.lock);
 	XPLMUnregisterFlightLoopCallback(floop_cb, NULL);
+	mutex_destroy(&navaid_fail.lock);
 }
 
 void
@@ -3433,4 +3468,58 @@ navrad_get_brg_override(navrad_type_t type, unsigned nr)
 {
 	radio_t *radio = find_radio(type, nr);
 	return (radio->brg_override);
+}
+
+void
+navrad_set_navaid_fail_ID(unsigned slot, const char *name)
+{
+	ASSERT3U(slot, <, NUM_NAVAID_FAILS);
+	mutex_enter(&navaid_fail.lock);
+	if (name != NULL) {
+		strlcpy(navaid_fail.ID[slot], name,
+		    sizeof (navaid_fail.ID[slot]));
+		strtoupper(navaid_fail.ID[slot]);
+	} else {
+		navaid_fail.ID[slot][0] = '\0';
+	}
+	mutex_exit(&navaid_fail.lock);
+}
+
+void
+navrad_set_navaid_fail_type(unsigned slot, navaid_type_t type)
+{
+	ASSERT3U(slot, <, NUM_NAVAID_FAILS);
+	mutex_enter(&navaid_fail.lock);
+	navaid_fail.type[slot] = type;
+	mutex_exit(&navaid_fail.lock);
+}
+
+void
+navrad_set_navaid_fail_state(unsigned slot, bool_t failed)
+{
+	ASSERT3U(slot, <, NUM_NAVAID_FAILS);
+	mutex_enter(&navaid_fail.lock);
+	navaid_fail.failed[slot] = failed;
+	mutex_exit(&navaid_fail.lock);
+}
+
+const char *
+navrad_get_navaid_fail_ID(unsigned slot)
+{
+	ASSERT3U(slot, <, NUM_NAVAID_FAILS);
+	return (navaid_fail.ID[slot]);
+}
+
+navaid_type_t
+navrad_get_navaid_fail_type(unsigned slot)
+{
+	ASSERT3U(slot, <, NUM_NAVAID_FAILS);
+	return (navaid_fail.type[slot]);
+}
+
+bool_t
+navrad_get_navaid_fail_state(unsigned slot)
+{
+	ASSERT3U(slot, <, NUM_NAVAID_FAILS);
+	return (navaid_fail.failed[slot]);
 }

@@ -141,6 +141,15 @@ void navrad_free_audio_buf(int16_t *buf);
 void navrad_done_audio(unsigned nr);
 void navrad_sync_streams(navrad_type_t type, unsigned nr);
 
+#define	NUM_NAVAID_FAILS	16
+void navrad_set_navaid_fail_ID(unsigned slot, const char *name);
+void navrad_set_navaid_fail_type(unsigned slot, navaid_type_t type);
+void navrad_set_navaid_fail_state(unsigned slot, bool_t failed);
+
+const char *navrad_get_navaid_fail_ID(unsigned slot);
+navaid_type_t navrad_get_navaid_fail_type(unsigned slot);
+bool_t navrad_get_navaid_fail_state(unsigned slot);
+
 #ifdef	__cplusplus
 }
 #endif
