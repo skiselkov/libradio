@@ -58,7 +58,7 @@
 #define	HDEF_MAX		5.0	/* dots */
 #define	HDEF_MAX_XP		2.5	/* dots */
 #define	VDEF_MAX		2.5	/* dots */
-#define	HDEF_VOR_DEG_PER_DOT	2.0	/* degrees per dot */
+#define	HDEF_VOR_DEG_PER_DOT	4.0	/* degrees per dot */
 #define	HDEF_LOC_DDM_PER_DOT	0.0775	/* degrees per dot */
 #define	VDEF_GS_DEG_PER_DOT	3.5714	/* degrees per dot */
 #define	HSENS_VOR		12.0	/* dot deflection per deg correction */
