@@ -125,8 +125,8 @@ XPluginStart(char *name, char *sig, char *desc)
 			*p = '\0';
 	}
 
-	log_init(log_dbg_string, "libradio.plugin");
-	logMsg("This is libradio.plugin");
+	log_init(log_dbg_string, "libradio.plugin(" PLUGIN_VERSION ")");
+	logMsg("This is libradio.plugin " PLUGIN_VERSION);
 
 	crc64_init();
 	if (!osrand(&seed, sizeof (seed)))
