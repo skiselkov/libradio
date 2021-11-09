@@ -43,7 +43,7 @@
 #endif
 
 #define	WORKER_INTVAL		250000
-#define	DEF_UPD_RATE(signal_db)	signal_db_upd_rate(1, (signal_db))
+#define	DEF_UPD_RATE(signal_db)	signal_db_upd_rate(0.25, (signal_db))
 #define	MIN_DELTA_T		0.01
 #define	NAVAID_SRCH_RANGE	NM2MET(300)
 #define	ANT_BASE_GAIN		92.0	/* dB */
@@ -2175,7 +2175,7 @@ signal_db_upd_rate(double orig_rate, double signal_db)
 {
 	double d_sig = signal_db - NOISE_FLOOR_ERROR_RATE;
 	double div = pow(10, d_sig / 20);
-	return (orig_rate + (orig_rate * 20) / div);
+	return (orig_rate + (orig_rate * 4) / div);
 }
 #endif	/* USE_XPLANE_RADIO_DRS */
 
