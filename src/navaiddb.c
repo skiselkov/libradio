@@ -324,12 +324,6 @@ parse_dme(char **comps, size_t n_comps, navaid_t **nav_pp)
 {
 	navaid_t *nav = parse_navaid_common(comps, n_comps, NAVAID_DME, 12);
 
-	if (n_comps >= 12 && strcmp(comps[n_comps - 2], "TACAN") == 0) {
-		/* Skip TACAN stations, as they don't use regular VOR freq */
-		free(nav);
-		return (B_TRUE);
-	}
-
 	if (nav != NULL)
 		nav->dme.bias = -NM2MET(atof(comps[6]));
 	if (nav == NULL ||
