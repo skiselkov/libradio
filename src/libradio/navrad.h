@@ -146,7 +146,7 @@ void navrad_set_navaid_fail_ID(unsigned slot, const char *name);
 void navrad_set_navaid_fail_type(unsigned slot, navaid_type_t type);
 void navrad_set_navaid_fail_state(unsigned slot, bool_t failed);
 
-const char *navrad_get_navaid_fail_ID(unsigned slot);
+void navrad_get_navaid_fail_ID(unsigned slot, char *buf, size_t cap);
 navaid_type_t navrad_get_navaid_fail_type(unsigned slot);
 bool_t navrad_get_navaid_fail_state(unsigned slot);
 

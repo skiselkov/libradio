@@ -3503,11 +3503,15 @@ navrad_set_navaid_fail_state(unsigned slot, bool_t failed)
 	mutex_exit(&navaid_fail.lock);
 }
 
-const char *
-navrad_get_navaid_fail_ID(unsigned slot)
+void
+navrad_get_navaid_fail_ID(unsigned slot, char *buf, size_t cap)
 {
 	ASSERT3U(slot, <, NUM_NAVAID_FAILS);
-	return (navaid_fail.ID[slot]);
+	ASSERT(buf != NULL || cap == 0);
+
+	mutex_enter(&navaid_fail.lock);
+	strlcpy(buf, navaid_fail.ID[slot], cap);
+	mutex_exit(&navaid_fail.lock);
 }
 
 navaid_type_t
