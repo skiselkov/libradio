@@ -1042,11 +1042,11 @@ ap_drs_config(double d_t)
 	dr_seti(&drs.ovrd_nav_heading, 1);
 #endif	/* LIBRADIO_APCTL */
 
-	hdef = dr_getf(&radio->drs.vloc.hdef_pilot);
+	hdef = dr_getf_prot(&radio->drs.vloc.hdef_pilot);
 	FILTER_IN(navrad.ap.hdef_rate, (hdef - navrad.ap.hdef_prev) / d_t, d_t,
 	    HDEF_RATE_UPD_RATE(radio->signal_db));
-	beta = rel_hdg(normalize_hdg(dr_getf(&drs.hpath)),
-	    normalize_hdg(dr_getf(&drs.hdg)));
+	beta = rel_hdg(normalize_hdg(dr_getf_prot(&drs.hpath)),
+	    normalize_hdg(dr_getf_prot(&drs.hdg)));
 	if (is_loc) {
 		const vect2_t sens[] = {
 		    VECT2(0, 24),
@@ -1084,7 +1084,7 @@ ap_drs_config(double d_t)
 	    -MAX_INTCPT_ANGLE, MAX_INTCPT_ANGLE);
 	if (dr_geti(&drs.ap_bc) != 0)
 		corr = -corr;
-	intcpt = normalize_hdg(dr_getf(&radio->drs.vloc.crs_degm_pilot) +
+	intcpt = normalize_hdg(dr_getf_prot(&radio->drs.vloc.crs_degm_pilot) +
 	    corr + beta);
 	FILTER_IN(navrad.ap.steer_tgt, intcpt, d_t,
 	    AP_STEER_UPD_RATE(radio->signal_db));
@@ -1207,7 +1207,7 @@ ap_radio_drs_config(radio_t *radio, double d_t)
 		if (!isnan(radio->brg)) {
 			dr_setf(brg_dr, normalize_hdg(radio->brg));
 		} else {
-			double brg = normalize_hdg(dr_getf(brg_dr));
+			double brg = normalize_hdg(dr_getf_prot(brg_dr));
 			double tgt = brg + rel_hdg(brg, NAVRAD_PARKED_BRG);
 			FILTER_IN(brg, tgt, d_t,
 			    BRG_UPD_RATE(radio->signal_db));
@@ -1228,14 +1228,14 @@ radio_floop_cb(radio_t *radio, double d_t)
 #if	USE_XPLANE_RADIO_DRS
 	switch (radio->type) {
 	case NAVRAD_TYPE_VLOC:
-		new_freq = dr_getf(&radio->drs.vloc.freq) * 10000;
+		new_freq = dr_getf_prot(&radio->drs.vloc.freq) * 10000;
 		break;
 	case NAVRAD_TYPE_ADF:
-		new_freq = dr_getf(&radio->drs.adf.freq) * 1000;
+		new_freq = dr_getf_prot(&radio->drs.adf.freq) * 1000;
 		break;
 	default:
 		ASSERT3U(radio->type, ==, NAVRAD_TYPE_DME);
-		new_freq = dr_getf(&radio->drs.dme.freq) * 10000;
+		new_freq = dr_getf_prot(&radio->drs.dme.freq) * 10000;
 		break;
 	}
 #else	/* !USE_XPLANE_RADIO_DRS */
@@ -1816,7 +1816,7 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 	/*
 	 * Reset time flow when in replay.
 	 */
-	navrad.cur_t = dr_getf(&drs.sim_time);
+	navrad.cur_t = dr_getf_prot(&drs.sim_time);
 	if (navrad.cur_t < navrad.last_t)
 		navrad.last_t = navrad.cur_t;
 	d_t = navrad.cur_t - navrad.last_t;
@@ -1825,10 +1825,10 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 		goto out;
 
 	mutex_enter(&navrad.lock);
-	navrad.pos = GEO_POS3(dr_getf(&drs.lat), dr_getf(&drs.lon),
-	    dr_getf(&drs.elev));
-	navrad.magvar = dr_getf(&drs.magvar);
-	navrad.hdgt = normalize_hdg(dr_getf(&drs.hdg));
+	navrad.pos = GEO_POS3(dr_getf_prot(&drs.lat), dr_getf_prot(&drs.lon),
+	    dr_getf_prot(&drs.elev));
+	navrad.magvar = dr_getf_prot(&drs.magvar);
+	navrad.hdgt = normalize_hdg(dr_getf_prot(&drs.hdg));
 	mutex_exit(&navrad.lock);
 
 	XPLMWorldToLocal(navrad.pos.lat, navrad.pos.lon, navrad.pos.elev,
@@ -2340,9 +2340,9 @@ radio_get_bearing(radio_t *radio)
 		enum { MAX_ERROR = 25 };
 
 		v = vect3_rot(v, -vert_angle, 0);
-		v = vect3_rot(v, true_brg - dr_getf(&drs.hdg), 1);
-		v = vect3_rot(v, dr_getf(&drs.pitch), 0);
-		v = vect3_rot(v, -dr_getf(&drs.roll), 2);
+		v = vect3_rot(v, true_brg - dr_getf_prot(&drs.hdg), 1);
+		v = vect3_rot(v, dr_getf_prot(&drs.pitch), 0);
+		v = vect3_rot(v, -dr_getf_prot(&drs.roll), 2);
 		v2 = VECT2(v.x, -v.z);
 
 		if (IS_ZERO_VECT2(v2))
@@ -2530,9 +2530,9 @@ radio_comp_hdef_vor(radio_t *radio, bool_t pilot, bool_t *tofrom_p)
 
 #if	USE_XPLANE_RADIO_DRS
 	if (pilot)
-		crs = dr_getf(&radio->drs.vloc.crs_degm_pilot);
+		crs = dr_getf_prot(&radio->drs.vloc.crs_degm_pilot);
 	else
-		crs = dr_getf(&radio->drs.vloc.crs_degm_copilot);
+		crs = dr_getf_prot(&radio->drs.vloc.crs_degm_copilot);
 #else	/* USE_XPLANE_RADIO_DRS */
 	UNUSED(pilot);
 	crs = radio->obs;
@@ -2746,7 +2746,7 @@ radio_brg_update(radio_t *radio, double d_t)
 		if (isnan(radio->brg))
 			radio->brg = NAVRAD_PARKED_BRG;
 		if (radio->type != NAVRAD_TYPE_ADF)
-			brg = normalize_hdg(brg - dr_getf(&drs.hdg));
+			brg = normalize_hdg(brg - dr_getf_prot(&drs.hdg));
 		else
 			brg = normalize_hdg(brg);
 		tgt = radio->brg + rel_hdg(radio->brg, brg);
