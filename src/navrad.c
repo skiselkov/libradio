@@ -1828,7 +1828,7 @@ floop_cb(float elapsed1, float elapsed2, int counter, void *refcon)
 	navrad.pos = GEO_POS3(dr_getf(&drs.lat), dr_getf(&drs.lon),
 	    dr_getf(&drs.elev));
 	navrad.magvar = dr_getf(&drs.magvar);
-	navrad.hdgt = dr_getf(&drs.hdg);
+	navrad.hdgt = normalize_hdg(dr_getf(&drs.hdg));
 	mutex_exit(&navrad.lock);
 
 	XPLMWorldToLocal(navrad.pos.lat, navrad.pos.lon, navrad.pos.elev,
