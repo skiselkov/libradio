@@ -71,7 +71,7 @@ Darwin)
 	if ! [ -f libradio.plugin/mac_x64/libradio.plugin.xpl ]; then
 		rm -f CMakeCache.txt
 		cmake . -DOPENGPWS="$OPENGPWS" -DLIBACFUTILS="$LIBACFUTILS"
-		cmake . --build -j "$NCPUS"
+		cmake --build . --parallel "$NCPUS"
 		if [ -n "$NOTARIZE" ]; then
 			make -f notarize/notarize.make notarize
 		fi
