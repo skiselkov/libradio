@@ -17,3 +17,8 @@ plugin/Makefile
 plugin/CMakeFiles
 plugin/CMakeCache.txt
 plugin/libradio.plugin
+plugin/notarize/user.make
+plugin/notarize/AuditInfo.json
+plugin/notarize/ExportOptions.plist
+plugin/notarize/RequestInfo.plist
+plugin/notarize/UploadInfo.plist
