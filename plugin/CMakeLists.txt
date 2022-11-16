@@ -264,4 +264,4 @@ set_target_properties(libradio PROPERTIES RUNTIME_OUTPUT_DIRECTORY
     "${CMAKE_SOURCE_DIR}/libradio.plugin/${PLUGIN_BIN_OUTDIR}")
 set_target_properties(libradio PROPERTIES LIBRARY_OUTPUT_DIRECTORY
     "${CMAKE_SOURCE_DIR}/libradio.plugin/${PLUGIN_BIN_OUTDIR}")
-set_target_properties(libradio PROPERTIES OUTPUT_NAME "libradio.xpl")
+set_target_properties(libradio PROPERTIES OUTPUT_NAME "libradio.plugin.xpl")
