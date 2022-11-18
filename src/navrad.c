@@ -3009,6 +3009,13 @@ navrad_set_failed(navrad_type_t type, unsigned nr, bool_t flag)
 	radio->failed = flag;
 }
 
+bool_t
+navrad_get_failed(navrad_type_t type, unsigned nr)
+{
+	const radio_t *radio = find_radio(type, nr);
+	return (radio->failed);
+}
+
 uint64_t
 navrad_get_freq(navrad_type_t type, unsigned nr)
 {
