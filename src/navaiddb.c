@@ -28,6 +28,7 @@
 #include <acfutils/log.h>
 #include <acfutils/helpers.h>
 #include <acfutils/htbl.h>
+#include <acfutils/math.h>
 #include <acfutils/perf.h>
 #include <acfutils/safe_alloc.h>
 #include <acfutils/thread.h>
