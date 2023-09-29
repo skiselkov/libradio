@@ -603,7 +603,6 @@ parse_earth_nav(navaiddb_t *db, const char *filename, bool_t replace_freq)
 	int version = 0;
 	char *line = NULL;
 	size_t cap = 0;
-	int line_nr = 3;
 
 	if (fp == NULL) {
 		logMsg("Error reading %s: %s", filename, strerror(errno));
@@ -624,8 +623,6 @@ parse_earth_nav(navaiddb_t *db, const char *filename, bool_t replace_freq)
 
 	while (getline(&line, &cap, fp) > 0) {
 		navaid_t *nav;
-
-		line_nr++;
 
 		if (!parse_line(line, &nav))
 			continue;
