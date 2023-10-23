@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-#if	IBM
+#if	IBM && !defined(XPLANE)
 #define	DISTORT_API	__declspec(dllexport) __stdcall
 #else
 #define	DISTORT_API
