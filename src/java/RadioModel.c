@@ -267,6 +267,12 @@ out:
 	lacf_free(path);
 }
 
+static void
+log_func(const char *str)
+{
+	puts(str);
+}
+
 JNIEXPORT void JNICALL
 Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
     jstring tile_path_str, jint spacing, jint max_pts, jint max_dist)
@@ -288,7 +294,7 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 		return;
 	}
 
-	log_init((logfunc_t)puts, "libradio");
+	log_init(log_func, "libradio");
 
 	if (spacing == 0)
 		spacing = DFL_SPACING;
