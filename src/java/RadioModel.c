@@ -24,6 +24,7 @@
 #include <dirent.h>
 #endif	/* LIN */
 
+#include <cairo.h>
 #include <jni.h>
 
 #include <shapefil.h>
@@ -31,7 +32,6 @@
 #include <acfutils/geom.h>
 #include <acfutils/helpers.h>
 #include <acfutils/math.h>
-#include <acfutils/mt_cairo_render.h>
 #include <acfutils/perf.h>
 #include <acfutils/png.h>
 #include <acfutils/safe_alloc.h>
@@ -279,7 +279,7 @@ Java_com_vspro_util_RadioModel_init(JNIEnv *env, jclass cls,
 	struct dirent *de;
 	typedef enum { FMT_NRM, FMT_HGT, FMT_H16 } imgfmt_t;
 
-	UNUSED(cls);
+	LACF_UNUSED(cls);
 
 	if (rm.inited) {
 		throw(env, "java/lang/ExceptionInInitializerError",
@@ -432,8 +432,8 @@ out:
 JNIEXPORT void JNICALL
 Java_com_vspro_util_RadioModel_fini(JNIEnv *env, jclass cls)
 {
-	UNUSED(env);
-	UNUSED(cls);
+	LACF_UNUSED(env);
+	LACF_UNUSED(cls);
 
 	if (!rm.inited)
 		return;
@@ -455,8 +455,8 @@ Java_com_vspro_util_RadioModel_countBytes(JNIEnv *env, jclass cls)
 {
 	int bytes = 0;
 
-	UNUSED(env);
-	UNUSED(cls);
+	LACF_UNUSED(env);
+	LACF_UNUSED(cls);
 
 	for (int lat = 0; lat < NUM_LAT; lat++) {
 		for (int lon = 0; lon < NUM_LON; lon++) {
@@ -674,7 +674,7 @@ Java_com_vspro_util_RadioModel_pointToPoint(JNIEnv *env, jclass cls,
     jdouble sta1_lat, jdouble sta1_lon, jdouble sta1_elev,
     jdouble sta2_lat, jdouble sta2_lon, jdouble sta2_elev)
 {
-	UNUSED(cls);
+	LACF_UNUSED(cls);
 
 	if (!init_test(env))
 		return (0);
@@ -795,7 +795,7 @@ Java_com_vspro_util_RadioModel_paintMapMulti(JNIEnv *env, jclass cls,
 	unsigned n_elevs = (*env)->GetArrayLength(env, sta2_elevs);
 	jdouble *lats, *lons, *elevs;
 
-	UNUSED(cls);
+	LACF_UNUSED(cls);
 
 	if (!init_test(env) || !validate_freq(env, freq_mhz))
 		return;
@@ -906,7 +906,7 @@ Java_com_vspro_util_RadioModel_elevProbe(JNIEnv *env, jclass cls,
 {
 	bool_t water;
 
-	UNUSED(cls);
+	LACF_UNUSED(cls);
 
 	if (!init_test(env))
 		return (0);

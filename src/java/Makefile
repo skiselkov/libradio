@@ -11,7 +11,7 @@
 #
 # CDDL HEADER END
 #
-# Copyright 2018 Saso Kiselkov. All rights reserved.
+# Copyright 2023 Saso Kiselkov. All rights reserved.
 #
 
 CLASSES = \
@@ -31,9 +31,9 @@ ifneq ($(win32),yes)
 CC=gcc
 CXX=g++
 
-DEFINES = -DIBM=0 -DLIN=1 -DAPL=0 -DRM_EXPORT
+DEFINES = -DIBM=0 -DLIN=1 -DAPL=0 -DRM_EXPORT -D_LACF_WITHOUT_XPLM -D_GNU_SOURCE
 
-CFLAGS = \
+CFLAGS = -std=c99 \
     $(DEFINES) -O3 -g3 \
     -I.. \
     -I$(ACFUTILS)/src \
@@ -95,7 +95,7 @@ RadioModel.zip : $(CLASSES) $(RADIOLIB) data
 
 lib/libRadioModel.so : $(OBJS)
 	mkdir -p lib
-	$(CC) $(CFLAGS) $(LDFLAGS) -shared -o $@ \
+	$(CXX) $(CFLAGS) $(LDFLAGS) -shared -o $@ \
 	    -Wl,-soname,RadioModel $^ $(LIBS)
 
 lib/RadioModel.dll : $(OBJS)
