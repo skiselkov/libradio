@@ -1,0 +1,10 @@
+sudo apt install git openjdk-<JDKVERSION>-jdk-headless
+
+git clone https://github.com/skiselkov/libacfutils.git
+
+./install-ubuntu-packages -m
+nice -n19 ./build_deps -m -f cairo -f shape
+cd qmake && nice -n19 ./build-win-lin -lX
+
+git clone https://github.com/skiselkov/libradio.git
+cd libradio/src/java && make ACFUTILS="$HOME/libacfutils" JAVA_INCLUDE_DIR=/usr/lib/jvm/java-<JDKVERSION>-openjdk-amd64/include
