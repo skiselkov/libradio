@@ -443,6 +443,7 @@ parse_line(char *line, navaid_t **nav_pp)
 	*nav_pp = NULL;
 
 	strip_space(line);
+	normalize_whitespace(line);
 	comps = strsplit(line, " ", B_TRUE, &n_comps);
 	if (n_comps == 0)
 		return (B_TRUE);
