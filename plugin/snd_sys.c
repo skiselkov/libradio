@@ -174,8 +174,6 @@ snd_sys_worker_init(void *userinfo)
 	}
 	radio_init(&sys->dme, 0, NAVRAD_TYPE_DME, sys->stream_id);
 
-	XPLMRegisterFlightLoopCallback(snd_sys_floop_cb, -1, NULL);
-
 	return (true);
 errout:
 	snd_sys_worker_fini(sys);
@@ -189,8 +187,6 @@ snd_sys_worker_fini(void *userinfo)
 
 	ASSERT(userinfo);
 	sys = userinfo;
-
-	XPLMUnregisterFlightLoopCallback(snd_sys_floop_cb, NULL);
 
 	for (int i = 0; i < NUM_NAV_RADIOS; i++) {
 		radio_fini(&sys->nav[i]);
@@ -356,6 +352,8 @@ snd_sys_init(void)
 	worker_init2(&main_sys_wk, snd_sys_worker_init, snd_sys_worker,
 	    snd_sys_worker_fini, WORKER_INTVAL, &main_sys, "libradio_snd_wk");
 
+	XPLMRegisterFlightLoopCallback(snd_sys_floop_cb, -1, NULL);
+
 	return (true);
 }
 
@@ -365,6 +363,8 @@ snd_sys_fini(void)
 	if (!inited)
 		return;
 	inited = false;
+
+	XPLMUnregisterFlightLoopCallback(snd_sys_floop_cb, NULL);
 
 	worker_fini(&main_sys_wk);
 	mutex_destroy(&snd_state.lock);
